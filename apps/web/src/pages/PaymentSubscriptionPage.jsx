@@ -22,12 +22,13 @@ const PaymentSubscriptionPage = () => {
   
   const signupData = location.state || {};
   
-  const email = signupData.email || '';
+  const isLoggedIn = !!currentUser;
+  const email = isLoggedIn ? (currentUser.email || '') : (signupData.email || '');
   const password = signupData.password || '';
-  const full_name = signupData.full_name || '';
-  const contact_number = signupData.contact_number || '';
-  const subscriptionAmount = signupData.subscriptionAmount || (signupData.premiumPlan === 'Yearly' ? 120.00 : 10.00);
-  const billingCycle = signupData.premiumPlan || 'Monthly'; // Usually 'Monthly' or 'Yearly' from signup
+  const full_name = isLoggedIn ? (currentUser.full_name || currentUser.name || '') : (signupData.full_name || '');
+  const contact_number = isLoggedIn ? (currentUser.phone || '') : (signupData.contact_number || '');
+  const subscriptionAmount = signupData.amount || signupData.subscriptionAmount || (signupData.premiumPlan === 'Yearly' ? 120.00 : 10.00);
+  const billingCycle = signupData.billingCycle || signupData.premiumPlan || 'Monthly';
 
   const [transactionReference, setTransactionReference] = useState('');
   const [loading, setLoading] = useState(false);
@@ -38,7 +39,7 @@ const PaymentSubscriptionPage = () => {
   const [missingData, setMissingData] = useState(false);
 
   useEffect(() => {
-    if (!email || !password || !full_name) {
+    if (!isLoggedIn && (!email || !password || !full_name)) {
       setMissingData(true);
       setError('Missing signup information. Please complete the signup process first.');
       logger.error('Missing signup data', { 
@@ -47,7 +48,7 @@ const PaymentSubscriptionPage = () => {
         hasFullName: !!full_name 
       });
     }
-  }, [email, password, full_name]);
+  }, [isLoggedIn, email, password, full_name]);
 
   useEffect(() => {
     const fetchPaymentAccountData = async () => {
@@ -110,48 +111,53 @@ const PaymentSubscriptionPage = () => {
     setError('');
 
     try {
-      // STEP 1 - Check/Create User
-      try {
-        await pb.collection('users').getFirstListItem(
-          `email = "${email.trim()}"`,
-          { $autoCancel: false }
-        );
-      } catch (err) {
+      let userId = isLoggedIn ? currentUser.id : null;
+
+      if (!isLoggedIn) {
+        // STEP 1 - Check/Create User (only for new signups)
         try {
-          await pb.collection('users').create({
-            email: email.trim(),
-            password: password,
-            passwordConfirm: password,
-            full_name: full_name.trim(),
-            phone: contact_number ? contact_number.trim() : '',
-            membership_type: 'free',
-            approval_status: 'pending_approval',
-            emailVisibility: true,
-            role: 'user'
-          }, { $autoCancel: false });
-        } catch (createErr) {
-          setError('Failed to create account. Please try again.');
-          toast.error('Failed to create account.');
+          await pb.collection('users').getFirstListItem(
+            `email = "${email.trim()}"`,
+            { $autoCancel: false }
+          );
+        } catch (err) {
+          try {
+            const newUser = await pb.collection('users').create({
+              email: email.trim(),
+              password: password,
+              passwordConfirm: password,
+              full_name: full_name.trim(),
+              phone: contact_number ? contact_number.trim() : '',
+              membership_type: 'free',
+              approval_status: 'pending_approval',
+              emailVisibility: true,
+              role: 'user'
+            }, { $autoCancel: false });
+            userId = newUser.id;
+          } catch (createErr) {
+            setError('Failed to create account. Please try again.');
+            toast.error('Failed to create account.');
+            setLoading(false);
+            return;
+          }
+        }
+
+        // Auth the newly created/existing user
+        try {
+          await pb.collection('users').authWithPassword(email.trim(), password, { $autoCancel: false });
+          await pb.collection('users').authRefresh({ $autoCancel: false });
+          userId = pb.authStore.model.id;
+        } catch (authErr) {
+          toast.error('Authentication failed. Cannot proceed with subscription creation.');
+          setError('Authentication failed. Cannot proceed with subscription creation.');
           setLoading(false);
           return;
         }
       }
 
-      // STEP 1 (Cont) - FORCE AUTH FIRST
-      try {
-        await pb.collection('users').authWithPassword(email.trim(), password, { $autoCancel: false });
-        // RE-VERIFY AUTH: Refresh token to ensure it's valid before creating subscription
-        await pb.collection('users').authRefresh({ $autoCancel: false });
-      } catch (authErr) {
-        toast.error('Authentication failed. Cannot proceed with subscription creation.');
-        setError('Authentication failed. Cannot proceed with subscription creation.');
-        setLoading(false);
-        return;
-      }
-
-      // STEP 2 & 3 - EXPLICIT PAYLOAD CONSTRUCTION for pending_subscriptions
+      // STEP 2 - Create pending subscription
       const subscriptionPayload = {
-        user_id: pb.authStore.model.id,
+        user_id: userId,
         email: email.trim(),
         full_name: full_name.trim(),
         contact_number: contact_number ? contact_number.trim() : '',
@@ -169,7 +175,6 @@ const PaymentSubscriptionPage = () => {
           throw new Error('Missing required subscription data');
         }
 
-        // Call the new backend endpoint
         const response = await apiServerClient.fetch(endpointUrl, {
           method: 'POST',
           headers: {
@@ -185,16 +190,15 @@ const PaymentSubscriptionPage = () => {
           throw new Error(data.message || data.error || 'Failed to create pending subscription');
         }
         
-        // STEP 5 - SUCCESS HANDLING
         setSuccess(true);
-        setTransactionReference(''); // Clear the form
+        setTransactionReference('');
         
         toast.success('Thank you! Your payment is under review. Our admin team will verify your payment and activate your account within 24 hours.', {
           duration: 6000
         });
         
         setTimeout(() => {
-          navigate('/');
+          navigate(isLoggedIn ? '/dashboard' : '/');
         }, 8000);
         
       } catch (err) {
@@ -203,7 +207,6 @@ const PaymentSubscriptionPage = () => {
         const errorMessage = err.message || 'Failed to process payment';
         setError(errorMessage);
         toast.error(errorMessage);
-        // Deliberately NOT clearing the form so the user can retry
       }
 
     } catch (outerErr) {
@@ -214,35 +217,6 @@ const PaymentSubscriptionPage = () => {
       setLoading(false);
     }
   };
-
-  if (currentUser) {
-    return (
-      <div className="min-h-screen flex flex-col bg-background">
-        <Helmet>
-          <title>Premium Subscription Payment | Temple Portal</title>
-        </Helmet>
-        <Header />
-        
-        <main className="flex-1 flex items-center justify-center p-4 py-12">
-          <Card className="max-w-md w-full border-primary/20 shadow-xl rounded-2xl">
-            <CardContent className="p-8 text-center space-y-4">
-              <div className="mx-auto w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center mb-4">
-                <User className="w-8 h-8 text-blue-500" />
-              </div>
-              <CardTitle className="text-2xl font-bold">Already Logged In</CardTitle>
-              <CardDescription className="text-base pb-4">
-                You are already logged in. Visit your dashboard to manage your subscription.
-              </CardDescription>
-              <Button onClick={() => navigate('/dashboard')} className="w-full h-12 text-base">
-                Go to Dashboard
-              </Button>
-            </CardContent>
-          </Card>
-        </main>
-        <Footer />
-      </div>
-    );
-  }
 
   if (missingData) {
     return (
@@ -311,7 +285,7 @@ const PaymentSubscriptionPage = () => {
                 <div className="p-5 bg-blue-50 border-2 border-blue-200 rounded-xl space-y-3">
                   <div className="flex items-center gap-2 mb-2">
                     <User className="w-5 h-5 text-blue-600" />
-                    <p className="text-sm font-bold text-blue-900">Creating Account For</p>
+                    <p className="text-sm font-bold text-blue-900">{isLoggedIn ? 'Upgrading Account' : 'Creating Account For'}</p>
                   </div>
                   <div className="space-y-2 pl-7">
                     <div className="flex items-start gap-2">
@@ -435,19 +409,12 @@ const PaymentSubscriptionPage = () => {
                           type="button"
                           onClick={handlePayOnlineClick}
                           disabled={!paymentLink || paymentLink.trim() === ''}
-                          className="flex-1 h-11 text-base font-semibold bg-[#FF69B4] hover:bg-[#FF1493] text-white shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="flex-1 h-11 text-base font-semibold bg-primary hover:bg-primary/90 text-primary-foreground shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           <CreditCard className="w-5 h-5 mr-2" />
-                          Pay Online
+                          Pay Via Direct Link
                         </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="flex-1 h-11 text-base font-semibold border-2 border-red-500 text-red-500 hover:bg-red-50 shadow-sm transition-all"
-                        >
-                          <QrCode className="w-5 h-5 mr-2" />
-                          SCAN TO PAY
-                        </Button>
+                        
                       </div>
                     </div>
                   </CardContent>
@@ -502,22 +469,24 @@ const PaymentSubscriptionPage = () => {
                           Verifying & Creating Account...
                         </>
                       ) : (
-                        'Verify & Create Account'
+                        'Submit for Upgrade'
                       )}
                     </Button>
                   </div>
                 </form>
 
-                <div className="text-center text-sm text-muted-foreground">
-                  Already have an account?{' '}
-                  <Button
-                    variant="link"
-                    className="p-0 h-auto text-primary hover:text-primary/80"
-                    onClick={() => navigate('/login')}
-                  >
-                    Login here
-                  </Button>
-                </div>
+                {!isLoggedIn && (
+                  <div className="text-center text-sm text-muted-foreground">
+                    Already have an account?{' '}
+                    <Button
+                      variant="link"
+                      className="p-0 h-auto text-primary hover:text-primary/80"
+                      onClick={() => navigate('/login')}
+                    >
+                      Login here
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}

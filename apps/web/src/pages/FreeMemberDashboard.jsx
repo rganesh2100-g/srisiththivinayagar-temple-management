@@ -67,7 +67,7 @@ const FreeMemberDashboard = () => {
                 <CardContent className="p-6 sm:p-8">
                   <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
                     <div className="space-y-3 min-w-0 flex-1">
-                      <div className="inline-flex items-center gap-1.5 bg-accent/10 text-accent-foreground px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide whitespace-nowrap border border-accent/20">
+                      <div className="inline-flex items-center gap-1.5 bg-accent/80 text-accent-foreground px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide whitespace-nowrap border border-accent/30">
                         <Sparkles className="w-3.5 h-3.5" /> Recommended
                       </div>
                       <h3 className="font-semibold text-2xl text-foreground truncate">Upgrade to Premium</h3>
@@ -142,7 +142,7 @@ const FreeMemberDashboard = () => {
               </Link>
 
               <Link to="/donate" className="relative overflow-hidden rounded-2xl border border-border/50 bg-card p-6 shadow-sm transition-all duration-300 hover:shadow-md hover:-translate-y-0.5 group min-w-0">
-                <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-accent/10 text-accent-foreground transition-colors group-hover:bg-accent group-hover:text-accent-foreground shrink-0">
+                <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-xl bg-accent/10 text-accent transition-colors group-hover:bg-accent group-hover:text-accent-foreground shrink-0">
                   <Heart className="w-6 h-6" />
                 </div>
                 <h3 className="font-semibold text-lg text-foreground mb-1 truncate">Make a Donation</h3>
@@ -156,38 +156,6 @@ const FreeMemberDashboard = () => {
           </div>
 
           <div className="lg:col-span-1 space-y-6">
-            <Card className="shadow-sm border-none rounded-2xl overflow-hidden bg-card min-w-0">
-              <CardHeader className="bg-muted/40 pb-5 border-b border-border/50 shrink-0">
-                <CardTitle className="flex items-center gap-2 text-lg font-semibold truncate">
-                  <User className="w-5 h-5 text-primary shrink-0" />
-                  Profile Summary
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-6 space-y-6 min-w-0">
-                <div className="min-w-0">
-                  <label className="text-xs font-bold tracking-wider uppercase text-muted-foreground">Full Name</label>
-                  <p className="text-base font-medium text-foreground mt-1 truncate" title={displayName}>{displayName}</p>
-                </div>
-                <div className="min-w-0">
-                  <label className="text-xs font-bold tracking-wider uppercase text-muted-foreground flex items-center gap-1.5">
-                    <Mail className="w-3.5 h-3.5 shrink-0" /> Email Address
-                  </label>
-                  <p className="text-base font-medium text-foreground mt-1 truncate" title={currentUser?.email}>
-                    {currentUser?.email || 'N/A'}
-                  </p>
-                </div>
-                <div>
-                  <label className="text-xs font-bold tracking-wider uppercase text-muted-foreground flex items-center gap-1.5">
-                    <Shield className="w-3.5 h-3.5 shrink-0" /> Account Type
-                  </label>
-                  <div className="mt-2">
-                    <Badge variant="secondary" className="px-3 py-1 text-sm font-medium rounded-lg bg-secondary/80 text-secondary-foreground border border-border/50 truncate max-w-full block">
-                      {accountType}
-                    </Badge>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
 
             <SubscriptionHistorySidebar 
               currentUser={currentUser} 
