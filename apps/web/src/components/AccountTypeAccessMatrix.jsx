@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import pb from '@/lib/pocketbaseClient.js';
 import { Search, AlertCircle, RefreshCw, FileText, ShieldAlert } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton.jsx';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table.jsx';
@@ -9,84 +8,42 @@ import { Button } from '@/components/ui/button.jsx';
 import { Badge } from '@/components/ui/badge.jsx';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs.jsx';
 
-const AccountTypeAccessMatrix = () => {
-  const [pages, setPages] = useState([]);
-  const [accountTypes, setAccountTypes] = useState([]);
-  const [accessMatrix, setAccessMatrix] = useState({});
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(false);
+const AccountTypeAccessMatrix = ({ pages = [], accountTypes = [], pageAccesses = [], loading = false }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('');
 
-  const fetchData = async () => {
-    setIsLoading(true);
-    setError(false);
-    try {
-      const [pagesRes, typesRes, accessRes] = await Promise.all([
-        pb.collection('pages').getFullList({ sort: 'name', $autoCancel: false }),
-        pb.collection('account_types').getFullList({ sort: 'name', $autoCancel: false }),
-        pb.collection('page_access').getFullList({ $autoCancel: false })
-      ]);
-      
-      setPages(pagesRes);
-      setAccountTypes(typesRes);
-      
-      if (typesRes.length > 0) {
-        setActiveTab(typesRes[0].id);
-      }
-
-      // Build access matrix mapping: accountTypeId -> pageRoute -> accessLevel
-      const matrix = {};
-      typesRes.forEach(type => {
-        matrix[type.id] = {};
-      });
-
-      accessRes.forEach(acc => {
-        if (acc.userId && matrix[acc.userId]) {
-          matrix[acc.userId][acc.pageRoute] = {
-            isActive: acc.isActive,
-            accessLevel: acc.accessLevel
-          };
-        }
-      });
-      
-      setAccessMatrix(matrix);
-    } catch (err) {
-      console.error('Matrix fetch error:', err);
-      setError(true);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   useEffect(() => {
-    fetchData();
-  }, []);
+    if (accountTypes.length > 0) {
+      if (!activeTab || !accountTypes.some(t => t.id === activeTab)) {
+        setActiveTab(accountTypes[0].id);
+      }
+    } else {
+      setActiveTab('');
+    }
+  }, [accountTypes]);
 
-  if (error) {
-    return (
-      <Card className="border-destructive/20 shadow-sm rounded-2xl bg-destructive/5 overflow-hidden mt-8">
-        <CardContent className="p-12 flex flex-col items-center justify-center text-center space-y-4">
-          <AlertCircle className="w-10 h-10 text-destructive/80" />
-          <div className="space-y-1">
-            <h3 className="text-lg font-medium text-destructive">Failed to load permissions</h3>
-            <p className="text-sm text-destructive/80 max-w-sm mx-auto">
-              We couldn't retrieve the account access matrix. Please check your connection.
-            </p>
-          </div>
-          <Button 
-            onClick={fetchData} 
-            variant="outline" 
-            className="mt-4 border-destructive/30 text-destructive hover:bg-destructive/10 gap-2 transition-all duration-200 active:scale-[0.98]"
-          >
-            <RefreshCw className="w-4 h-4" /> Retry Loading
-          </Button>
-        </CardContent>
-      </Card>
-    );
-  }
+  const accessMatrix = {};
+  accountTypes.forEach(type => {
+    accessMatrix[type.id] = {};
+  });
 
-  if (isLoading) {
+  pageAccesses.forEach(acc => {
+    if (!acc.userId) {
+      accountTypes.forEach(type => {
+        accessMatrix[type.id][acc.pageRoute] = {
+          isActive: acc.isActive,
+          accessLevel: acc.accessLevel
+        };
+      });
+    } else if (accessMatrix[acc.userId]) {
+      accessMatrix[acc.userId][acc.pageRoute] = {
+        isActive: acc.isActive,
+        accessLevel: acc.accessLevel
+      };
+    }
+  });
+
+  if (loading) {
     return (
       <Card className="border-border/50 shadow-sm rounded-2xl overflow-hidden mt-8">
         <CardContent className="p-6 space-y-6">

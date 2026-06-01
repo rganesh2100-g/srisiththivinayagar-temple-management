@@ -454,7 +454,12 @@ const AccountTypeSettings = () => {
               </div>
 
               {/* Added Component */}
-              <AccountTypeAccessMatrix />
+              <AccountTypeAccessMatrix
+                pages={pages}
+                accountTypes={accountTypes}
+                pageAccesses={pageAccesses}
+                loading={isLoading}
+              />
             </TabsContent>
 
             {/* TAB 2: USER ASSIGNMENTS */}
