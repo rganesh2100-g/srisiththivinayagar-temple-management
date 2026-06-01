@@ -1,0 +1,23 @@
+/// <reference path="../pb_data/types.d.ts" />
+migrate((app) => {
+  const collection = app.findCollectionByNameOrId("pooja_bookings");
+
+  const existing = collection.fields.getByName("fee_amount");
+  if (existing) {
+    if (existing.type === "number") {
+      return; // field already exists with correct type, skip
+    }
+    collection.fields.removeByName("fee_amount"); // exists with wrong type, remove first
+  }
+
+  collection.fields.add(new NumberField({
+    name: "fee_amount",
+    required: false
+  }));
+
+  return app.save(collection);
+}, (app) => {
+  const collection = app.findCollectionByNameOrId("pooja_bookings");
+  collection.fields.removeByName("fee_amount");
+  return app.save(collection);
+})

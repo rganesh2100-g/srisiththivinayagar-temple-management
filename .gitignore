@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# PocketBase - database, storage, backups
+apps/pocketbase/pocketbase
+apps/pocketbase/pocketbase.exe
+apps/pocketbase/pb_data/
+apps/pocketbase/pb_data/**/*.db
+apps/pocketbase/pb_data/**/*.db-shm
+apps/pocketbase/pb_data/**/*.db-wal
+apps/pocketbase/pb_data/storage/
+apps/pocketbase/pb_data/backups/
+apps/pocketbase/pb_data.backup/
+apps/pocketbase/pb_migrations/_skipped_seeds/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Workspace-level lock files (root package-lock.json is the single source of truth)
+apps/*/package-lock.json
+
+# Vite cache
+.vite/

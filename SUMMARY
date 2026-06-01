@@ -1,0 +1,11 @@
+### MyProfile.jsx Side Menu Display Fix
+
+I have updated the `MyProfile.jsx` page to use the `DashboardLayout` component instead of manually rendering the `Header`, `SideMenu`, and `Footer`. 
+
+**Changes Made:**
+1. Replaced the manual layout structure (`<Header>`, `<div className="flex-1 flex flex-row w-full"><SideMenu /><main>...</main></div>`, `<Footer>`) with the standard `<DashboardLayout>` wrapper.
+2. This ensures the `MyProfile` page perfectly matches the layout structure, responsiveness, and side menu visibility of other dashboard pages like `MyActivity.jsx` and `MyBookingsPage.jsx`.
+3. Applied the `DashboardLayout` wrapper to the loading and error states as well to maintain a consistent UI during data fetching.
+4. Preserved all existing functionality, including the "Upgrade to Premium" redirect to `/membership-selection`, profile editing, avatar uploading, and password updates.
+
+No other pages or functionalities were modified. The side menu will now display correctly and consistently on the My Profile page.

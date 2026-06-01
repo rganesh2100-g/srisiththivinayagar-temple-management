@@ -1,0 +1,150 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Dashboard Layout Variables */
+    --sidebar-width: 260px;
+    --header-height: 80px;
+    --content-padding: clamp(1rem, 3vw, 1.5rem);
+
+    /* Base Colors - Clean White Background */
+    --background: 36 33% 97%; /* #FDF8F0 */
+    --foreground: 20 14% 10%;
+    
+    /* Surface Colors */
+    --card: 0 0% 100%;
+    --card-foreground: 20 14% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 20 14% 10%;
+    
+    /* Semantic Colors */
+    --primary: 0 100% 27%; /* #8B0000 */
+    --primary-foreground: 0 0% 100%; 
+    
+    --secondary: 36 33% 92%;
+    --secondary-foreground: 20 14% 10%;
+    
+    --muted: 36 20% 90%;
+    --muted-foreground: 25 10% 40%;
+    
+    --accent: 30 100% 50%; /* Orange accent */
+    --accent-foreground: 0 0% 100%; 
+    
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Admin Status Colors */
+    --success: 142 71% 45%;
+    --success-foreground: 144 100% 11%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 48 100% 11%;
+    --danger: 0 84% 60%;
+    --danger-foreground: 0 0% 100%;
+    
+    /* Borders & Inputs */
+    --border: 36 20% 85%;
+    --input: 36 20% 85%;
+    --ring: 0 100% 27%;
+    
+    /* Geometry & Spacing */
+    --radius: 0.75rem;
+
+    /* Shadows */
+    --shadow-color: 20 14% 10%;
+    --shadow-sm: 0 1px 2px 0 hsl(var(--shadow-color) / 0.05);
+    --shadow-md: 0 4px 6px -1px hsl(var(--shadow-color) / 0.08), 0 2px 4px -2px hsl(var(--shadow-color) / 0.04);
+    --shadow-lg: 0 10px 15px -3px hsl(var(--shadow-color) / 0.08), 0 4px 6px -4px hsl(var(--shadow-color) / 0.04);
+    
+    /* Card Custom Properties */
+    --card-surface-gradient-start: 0 0% 100%;
+    --card-surface-gradient-end: 36 33% 95%;
+    --card-hover-elevation: 0 20px 25px -5px hsl(var(--shadow-color) / 0.1), 0 8px 10px -6px hsl(var(--shadow-color) / 0.05);
+    
+    /* Typography Scales */
+    --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+    --font-heading: 'Playfair Display', serif;
+  }
+
+  .dark {
+    --background: 0 10% 8%;
+    --foreground: 0 0% 96%;
+    
+    --card: 0 10% 11%;
+    --card-foreground: 0 0% 96%;
+    --popover: 0 10% 11%;
+    --popover-foreground: 0 0% 96%;
+    
+    --primary: 0 80% 40%; 
+    --primary-foreground: 0 0% 100%;
+    
+    --secondary: 0 10% 16%;
+    --secondary-foreground: 0 0% 96%;
+    
+    --muted: 0 10% 16%;
+    --muted-foreground: 0 0% 65%;
+    
+    --accent: 30 100% 50%;
+    --accent-foreground: 0 10% 8%;
+    
+    --destructive: 0 62% 40%;
+    --destructive-foreground: 0 0% 100%;
+    
+    --border: 0 10% 20%;
+    --input: 0 10% 20%;
+    --ring: 0 80% 40%;
+
+    --shadow-color: 0 0% 0%;
+
+    /* Card Custom Properties (Dark Mode) */
+    --card-surface-gradient-start: 0 10% 11%;
+    --card-surface-gradient-end: 0 10% 13%;
+    --card-hover-elevation: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  
+  html, body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.625;
+    overflow-x: hidden; 
+    width: 100%;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    color: hsl(var(--foreground));
+    text-wrap: balance;
+    letter-spacing: -0.02em;
+    font-family: var(--font-heading);
+  }
+
+  h1 { font-size: clamp(2rem, 5vw + 1rem, 3.75rem); line-height: 1.1; font-weight: 700; }
+  h2 { font-size: clamp(1.5rem, 4vw + 0.5rem, 2.25rem); line-height: 1.2; font-weight: 600; }
+  h3 { font-size: clamp(1.25rem, 3vw + 0.5rem, 1.75rem); line-height: 1.3; font-weight: 600; }
+  h4 { font-size: clamp(1.125rem, 2vw + 0.5rem, 1.5rem); line-height: 1.4; font-weight: 500; }
+  
+  p {
+    max-width: 65ch;
+  }
+}
+
+@layer utilities {
+  .text-balance { text-wrap: balance; }
+  .text-pretty { text-wrap: pretty; }
+}

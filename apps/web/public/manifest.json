@@ -1,0 +1,27 @@
+{
+  "name": "Sri Sithivinayagar Temple",
+  "short_name": "Sri Sithivinayagar",
+  "description": "A sacred sanctuary in the heart of Vienna",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#630330",
+  "theme_color": "#630330",
+  "icons": [
+    {
+      "src": "https://horizons-cdn.hostinger.com/5e34f49c-00e8-4e55-9306-3c6d20c04e0a/af4030f5a5ca7d1c00d07b865d57e9fd.png?v=192_2",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://horizons-cdn.hostinger.com/5e34f49c-00e8-4e55-9306-3c6d20c04e0a/af4030f5a5ca7d1c00d07b865d57e9fd.png?v=256_2",
+      "sizes": "256x256",
+      "type": "image/png"
+    },
+    {
+      "src": "https://horizons-cdn.hostinger.com/5e34f49c-00e8-4e55-9306-3c6d20c04e0a/af4030f5a5ca7d1c00d07b865d57e9fd.png?v=512_2",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
