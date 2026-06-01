@@ -30,7 +30,7 @@ const HomePage = () => {
         <Header />
         
         <main className="flex-1">
-          <section className="relative h-[65vh] min-h-[500px] flex items-center justify-center overflow-hidden bg-black">
+          <section className="relative h-[500px] flex items-end justify-center overflow-hidden bg-black">
             <div className="absolute inset-0">
               <img
                 src="https://horizons-cdn.hostinger.com/5e34f49c-00e8-4e55-9306-3c6d20c04e0a/592a025634a3caad2f47706e8b36979c.jpg"
@@ -46,7 +46,7 @@ const HomePage = () => {
               transition={{ duration: 0.8, ease: "easeOut" }}
               className="relative z-10 text-center px-4 max-w-4xl mx-auto mt-16"
             >
-              <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold text-white mb-6 leading-tight" style={{ fontFamily: 'Playfair Display, serif', textShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
+              <h1 className="text-[3rem] font-bold text-white mb-6 leading-tight" style={{ fontFamily: 'Playfair Display, serif', textShadow: '0 4px 12px rgba(0,0,0,0.5)' }}>
                 {t('home.hero_title', 'Welcome to Sri Siththi Vinayagar Temple')}
               </h1>
               <p className="text-lg md:text-2xl text-amber-300 font-medium mb-10 max-w-2xl mx-auto" style={{ textShadow: '0 2px 4px rgba(0,0,0,0.8)' }}>
@@ -56,7 +56,7 @@ const HomePage = () => {
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
-                  className="bg-amber-400 text-amber-950 px-8 py-4 rounded-full font-bold text-lg shadow-xl hover:shadow-amber-400/30 transition-all duration-300"
+                  className="bg-amber-400 text-amber-950 px-8 py-4 rounded-full font-bold text-lg shadow-xl hover:shadow-amber-400/30 transition-all duration-300 mb-8"
                 >
                   {t('header.about', 'Discover Our Temple')}
                 </motion.button>
