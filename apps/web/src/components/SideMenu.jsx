@@ -1,14 +1,20 @@
 import React from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext.jsx';
-import { LayoutDashboard, CheckCircle, Plus, Archive, FileText, Calendar, MessageSquare, CreditCard, Building, DollarSign, Layers, Wallet, BookOpen, Gift, Bell, Image as Images, User, TrendingUp, Settings } from 'lucide-react';
+import { LayoutDashboard, CheckCircle, Plus, Archive, FileText, Calendar, MessageSquare, CreditCard, Building, DollarSign, Layers, Wallet, BookOpen, Gift, Bell, Image as Images, User, TrendingUp, Settings, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils.js';
 
 const SideMenu = () => {
   const location = useLocation();
-  const { currentUser, accountType, isAdmin } = useAuth();
+  const navigate = useNavigate();
+  const { currentUser, accountType, isAdmin, logout } = useAuth();
 
   const effectiveRole = isAdmin ? 'admin' : (accountType || 'free');
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
 
   const allMenuItems = [
     // Admin Links
@@ -45,8 +51,40 @@ const SideMenu = () => {
   const visibleItems = allMenuItems.filter(item => item.access.includes(effectiveRole));
 
   return (
-    <aside className="sidebar w-full md:w-64 shrink-0 flex flex-col bg-card border-b md:border-b-0 md:border-r border-border/50 md:h-[calc(100vh-4rem)] md:sticky md:top-16 z-20 transition-all duration-200">
-      <nav className="flex flex-row md:flex-col overflow-x-auto md:overflow-y-auto p-2 md:p-4 gap-2 md:gap-0 md:space-y-1.5 scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent">
+    <aside className="sidebar w-full md:w-64 shrink-0 flex flex-col bg-card border-b md:border-b-0 md:border-r border-border/50 md:h-[100vh] md:sticky md:top-0 z-20 transition-all duration-200">
+      {/* Brand Logo & Name - desktop only */}
+      <div className="hidden md:block shrink-0">
+        <Link to="/" className="flex items-center gap-3 px-4 py-3 border-b border-border/50 hover:bg-muted/50 transition-colors">
+          <img 
+            src="https://horizons-cdn.hostinger.com/5e34f49c-00e8-4e55-9306-3c6d20c04e0a/08e7c3c2747f27a1a96cf9390265a4cf.png" 
+            alt="Temple Logo"
+            className="h-9 w-9 object-contain shrink-0 rounded-full"
+          />
+          <div className="flex flex-col">
+            <span className="font-bold text-sm text-foreground leading-tight">Sri Siththi Vinayagar</span>
+            <span className="text-[10px] text-muted-foreground leading-tight">Tempel Kultur Verein</span>
+          </div>
+        </Link>
+      </div>
+
+      {/* User Info Card - desktop only */}
+      <div className="hidden md:block shrink-0 px-4 py-3 border-b border-border/50">
+        <div className="flex items-start gap-3 p-3 rounded-xl bg-muted/50 border border-border/30">
+          <div className="flex flex-col min-w-0 flex-1 gap-1">
+            <span className="font-semibold text-sm text-foreground truncate">
+              {currentUser?.name || currentUser?.email?.split('@')[0] || 'User'}
+            </span>
+            <span className="text-[11px] text-muted-foreground truncate">
+              {currentUser?.email}
+            </span>
+            <span className="inline-block w-fit text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-primary/10 text-primary mt-0.5">
+              {isAdmin ? 'Admin' : accountType || 'Free Member'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <nav className="flex flex-row md:flex-col overflow-x-auto md:overflow-y-auto p-2 md:p-4 gap-2 md:gap-0 md:space-y-1.5 scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent flex-1">
         {visibleItems.map((item) => {
           const Icon = item.icon;
           const isActive = location.pathname === item.path || location.pathname.startsWith(item.path + '/');
@@ -71,6 +109,17 @@ const SideMenu = () => {
           );
         })}
       </nav>
+
+      {/* Logout Button - desktop only */}
+      <div className="hidden md:block p-4 border-t border-border/50 shrink-0">
+        <button
+          onClick={handleLogout}
+          className="flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm font-medium text-destructive hover:bg-destructive/10 transition-colors duration-200"
+        >
+          <LogOut className="w-5 h-5 shrink-0" />
+          <span>Logout</span>
+        </button>
+      </div>
     </aside>
   );
 };

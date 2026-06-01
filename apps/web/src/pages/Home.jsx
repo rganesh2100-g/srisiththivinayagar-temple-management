@@ -3,8 +3,7 @@ import { Helmet } from 'react-helmet';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import pb from '@/lib/pocketbaseClient.js';
-import Header from '@/components/Header.jsx';
-import Footer from '@/components/Footer.jsx';
+
 import SideMenu from '@/components/SideMenu.jsx';
 import PoojaCard from '@/components/PoojaCard.jsx';
 import { Button } from '@/components/ui/button.jsx';
@@ -110,8 +109,6 @@ const Home = () => {
       <Helmet>
         <title>Dashboard | Sri Siththi Vinayagar Temple</title>
       </Helmet>
-      <Header />
-      
       <div className="flex-1 flex flex-col md:flex-row max-w-7xl mx-auto w-full">
         {currentUser && <SideMenu />}
         
@@ -290,7 +287,6 @@ const Home = () => {
 
         </main>
       </div>
-      <Footer />
     </div>
   );
 };

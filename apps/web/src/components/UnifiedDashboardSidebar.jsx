@@ -103,7 +103,7 @@ const UnifiedDashboardSidebar = () => {
 
       {/* Sidebar Container */}
       <aside className={cn(
-        "fixed md:sticky top-0 md:top-20 left-0 z-50 h-[100dvh] md:h-[calc(100dvh-5rem)] w-[280px] md:w-64 bg-card border-r border-border/50 flex flex-col shrink-0 transform transition-transform duration-300 ease-in-out shadow-xl md:shadow-none",
+        "fixed md:sticky top-0 left-0 z-50 h-[100dvh] w-[280px] md:w-64 bg-card border-r border-border/50 flex flex-col shrink-0 transform transition-transform duration-300 ease-in-out shadow-xl md:shadow-none",
         isOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
       )}>
         
@@ -115,9 +115,46 @@ const UnifiedDashboardSidebar = () => {
           </Button>
         </div>
 
+        {/* Brand Logo & Name */}
+        <div className="shrink-0">
+          <Link
+            to="/"
+            onClick={() => setIsOpen(false)}
+            className="flex items-center gap-3 px-4 py-3 border-b border-border/50 hover:bg-muted/50 transition-colors"
+          >
+            <img 
+              src="https://horizons-cdn.hostinger.com/5e34f49c-00e8-4e55-9306-3c6d20c04e0a/08e7c3c2747f27a1a96cf9390265a4cf.png" 
+              alt="Temple Logo"
+              className="h-9 w-9 object-contain shrink-0 rounded-full"
+            />
+            <div className="flex flex-col">
+              <span className="font-bold text-sm text-foreground leading-tight">Sri Siththi Vinayagar</span>
+              <span className="text-[10px] text-muted-foreground leading-tight">Tempel Kultur Verein</span>
+            </div>
+          </Link>
+        </div>
+
+        {/* User Info Card */}
+        <div className="shrink-0 px-4 py-3 border-b border-border/50">
+          <div className="flex items-start gap-3 p-3 rounded-xl bg-muted/50 border border-border/30">
+            <div className="flex flex-col min-w-0 flex-1 gap-1">
+              <span className="font-semibold text-sm text-foreground truncate">
+                {currentUser?.name || currentUser?.email?.split('@')[0] || 'User'}
+              </span>
+              <span className="text-[11px] text-muted-foreground truncate">
+                {currentUser?.email}
+              </span>
+              <span className="inline-block w-fit text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-primary/10 text-primary mt-0.5">
+                {isUserAdmin ? 'Admin' : accountType || 'Free Member'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Navigation */}
         <nav className="flex-1 overflow-y-auto p-3 md:p-4 space-y-1 custom-scrollbar min-h-0">
           <div className="mb-2 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-            Member Menu
+            Operations
           </div>
           {menuItems.map((item) => {
             const Icon = item.icon;
@@ -184,6 +221,7 @@ const UnifiedDashboardSidebar = () => {
           )}
         </nav>
         
+        {/* Logout Button */}
         <div className="p-4 border-t border-border/50 shrink-0">
           <button
             onClick={handleLogout}
