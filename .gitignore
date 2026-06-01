@@ -43,3 +43,7 @@ apps/*/package-lock.json
 
 # Vite cache
 .vite/
+
+# Startup scripts (local dev only)
+start.ps1
+start.sh
