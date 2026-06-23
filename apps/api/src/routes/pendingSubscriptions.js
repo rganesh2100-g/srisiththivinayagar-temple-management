@@ -50,6 +50,91 @@ const generateSecurePassword = () => {
 };
 
 /**
+ * POST /pending-subscriptions/create
+ * Create a pending subscription request (from signup or upgrade flow)
+ *
+ * Request body:
+ *   - user_id (string, required)
+ *   - email (string, required)
+ *   - full_name (string, required)
+ *   - contact_number (string, optional)
+ *   - subscription_type (string, required)
+ *   - transaction_id (string, required)
+ *
+ * Response:
+ *   - { success: true, message: 'Pending subscription created', id: string }
+ */
+router.post('/create', async (req, res) => {
+  try {
+    const {
+      user_id,
+      email,
+      full_name,
+      contact_number,
+      subscription_type,
+      amount,
+      transaction_id,
+      status
+    } = req.body;
+
+    // Validate required fields
+    if (!user_id || !email || !full_name || !subscription_type || !amount || !transaction_id || !status) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
+        message: 'Missing required fields'
+      });
+    }
+
+    const normalizedType = String(subscription_type || 'monthly').toLowerCase();
+    const durationMonths = normalizedType.includes('year') ? 12 : 1;
+    const fmtDate = (d) => d.toISOString().replace('T', ' ');
+    const startDate = fmtDate(new Date());
+    const endDate = fmtDate(new Date(Date.now() + durationMonths * 30 * 24 * 60 * 60 * 1000));
+
+    // Create record in payments collection
+    const record = await pb.collection('payments').create({
+      user: user_id,
+      email,
+      amount: Number(amount),
+      total_amount: Number(amount),
+      plan_type: 'premium',
+      billing_cycle: normalizedType,
+      transaction_id,
+      transaction_ref: transaction_id,
+      status,
+      start_date: startDate,
+      end_date: endDate,
+      custom_donation: 0
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Pending subscription created successfully',
+      data: record
+    });
+
+  } catch (error) {
+    console.error('=== PAYMENT CREATE ERROR ===');
+    console.error('Message:', error.message);
+    console.error('Full error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    if (error?.response) {
+      console.error('Response data:', JSON.stringify(error.response, null, 2));
+    }
+    if (error?.data) {
+      console.error('Validation data:', JSON.stringify(error.data, null, 2));
+    }
+    console.error('=== END ERROR ===');
+
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Unknown error',
+      message: 'Failed to create pending subscription'
+    });
+  }
+});
+
+/**
  * POST /pending-subscriptions/approve
  * Approve a pending subscription and create a user account
  * SECURITY: Requires admin role

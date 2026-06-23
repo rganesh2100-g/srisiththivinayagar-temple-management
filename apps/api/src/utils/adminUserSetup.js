@@ -17,8 +17,8 @@ import logger from './logger.js';
 const adminUsers = [
   {
     email: 'admin@demo.com',
-    password: 'demo123',
-    passwordConfirm: 'demo123',
+    password: 'demo1234',
+    passwordConfirm: 'demo1234',
     name: 'Demo Admin',
     role: 'admin',
     verified: true,

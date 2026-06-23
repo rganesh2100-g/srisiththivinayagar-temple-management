@@ -26,6 +26,7 @@ const SignupPage = lazy(() => import("@/pages/SignupPage.jsx"));
 const MembershipPage = lazy(() => import("@/pages/MembershipPage.jsx"));
 const MembershipSelectionPage = lazy(() => import("@/pages/MembershipSelectionPage.jsx"));
 const PaymentSubscriptionPage = lazy(() => import("@/pages/PaymentSubscriptionPage.jsx"));
+const SubscriptionThankYouPage = lazy(() => import("@/pages/SubscriptionThankYouPage.jsx"));
 const FreeMembershipPage = lazy(() => import("@/pages/FreeMembershipPage.jsx"));
 const PremiumMembershipPage = lazy(() => import("@/pages/PremiumMembershipPage.jsx"));
 const DashboardRouter = lazy(() => import("@/components/DashboardRouter.jsx"));
@@ -135,6 +136,7 @@ const App = () => {
                       <Route path="/membership" element={<MembershipPage />} />
 <Route path="/membership/select" element={<MembershipSelectionPage />} />
 <Route path="/membership-payment" element={<PaymentSubscriptionPage />} />
+<Route path="/membership-payment/thank-you" element={<SubscriptionThankYouPage />} />
 <Route path="/membership/free" element={<FreeMembershipPage />} />
                       <Route path="/membership/premium" element={<PremiumMembershipPage />} />
                       <Route path="/donate" element={<TempleDonatePage />} />

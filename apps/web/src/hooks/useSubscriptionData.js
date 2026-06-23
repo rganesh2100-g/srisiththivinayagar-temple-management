@@ -39,8 +39,6 @@ export const useSubscriptionData = (userId) => {
 
     setLoading(true);
     
-    // 3. Optimize query by fetching only required fields directly from PocketBase
-    // Note: The schema uses 'user' as the relation field name, not 'user_id'
     const promise = pb.collection('subscriptions').getFirstListItem(`user="${userId}" && status="active"`, {
       fields: 'id,plan_type,status,start_date,end_date',
       $autoCancel: false

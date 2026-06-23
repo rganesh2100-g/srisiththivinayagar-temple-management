@@ -3,29 +3,30 @@
 onRecordCreate((e) => {
   console.log("=== SUBSCRIPTION CREATE DEBUG ===");
   console.log("Record data:", JSON.stringify({
-    user_id: e.record.get("user_id"),
-    email: e.record.get("email"),
-    full_name: e.record.get("full_name"),
-    subscription_type: e.record.get("subscription_type"),
-    membership_type: e.record.get("membership_type"),
+    user: e.record.get("user"),
+    plan_type: e.record.get("plan_type"),
     amount: e.record.get("amount"),
-    transaction_reference: e.record.get("transaction_reference"),
     transaction_id: e.record.get("transaction_id"),
-    approval_status: e.record.get("approval_status"),
-    rejection_reason: e.record.get("rejection_reason")
+    transaction_ref: e.record.get("transaction_ref"),
+    status: e.record.get("status"),
+    billing_cycle: e.record.get("billing_cycle"),
+    duration_months: e.record.get("duration_months"),
+    renewal_type: e.record.get("renewal_type"),
+    start_date: e.record.get("start_date"),
+    end_date: e.record.get("end_date")
   }, null, 2));
-  
-  // Verify user_id relation exists
+
+  // Verify user relation exists
   try {
-    const user = $app.findRecordById("users", e.record.get("user_id"));
-    console.log("User found:", user.get("email"), "| blocked:", user.get("is_blocked"), "| deleted:", user.get("is_deleted"), "| archived:", user.get("archived"));
+    const userRecord = $app.findRecordById("users", e.record.get("user"));
+    console.log("User found:", userRecord.get("email"), "| blocked:", userRecord.get("blocked"), "| deleted:", userRecord.get("deleted"), "| archived:", userRecord.get("archived"));
   } catch (err) {
     console.log("ERROR: User not found or error accessing user:", err.message);
-    throw new BadRequestError("User ID does not exist or is inaccessible: " + e.record.get("user_id"));
+    throw new BadRequestError("User ID does not exist or is inaccessible: " + e.record.get("user"));
   }
-  
+
   // Validate required fields
-  const requiredFields = ["user_id", "email", "full_name", "subscription_type", "membership_type", "amount", "transaction_reference", "transaction_id", "approval_status"];
+  const requiredFields = ["user", "plan_type", "amount", "status", "billing_cycle", "duration_months", "renewal_type", "start_date", "end_date"];
   for (const field of requiredFields) {
     const value = e.record.get(field);
     if (value === null || value === undefined || value === "") {
@@ -33,15 +34,15 @@ onRecordCreate((e) => {
       throw new BadRequestError("Required field is empty: " + field);
     }
   }
-  
-  // Validate approval_status is in allowed values
-  const validStatuses = ["pending_approval", "approved", "rejected"];
-  const status = e.record.get("approval_status");
+
+  // Validate status is in allowed values
+  const validStatuses = ["pending", "active", "rejected"];
+  const status = e.record.get("status");
   if (!validStatuses.includes(status)) {
-    console.log("VALIDATION ERROR: Invalid approval_status:", status);
-    throw new BadRequestError("Invalid approval_status. Must be one of: " + validStatuses.join(", "));
+    console.log("VALIDATION ERROR: Invalid status:", status);
+    throw new BadRequestError("Invalid status. Must be one of: " + validStatuses.join(", "));
   }
-  
+
   console.log("All validations passed");
   e.next();
 }, "subscriptions");

@@ -10,8 +10,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
-import { Hash, Loader2, User, CheckCircle2, Info, AlertTriangle, CreditCard, Building2, Mail, QrCode, Phone } from 'lucide-react';
+import { Hash, Loader2, User, Info, AlertTriangle, CreditCard, Building2, Mail, QrCode, Phone, CheckCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import logger from '@/lib/logger.js';
 
@@ -33,10 +34,11 @@ const PaymentSubscriptionPage = () => {
   const [transactionReference, setTransactionReference] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
   const [qrCodeUrl, setQrCodeUrl] = useState('');
   const [paymentLink, setPaymentLink] = useState('');
   const [missingData, setMissingData] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [submittedData, setSubmittedData] = useState(null);
 
   useEffect(() => {
     if (!isLoggedIn && (!email || !password || !full_name)) {
@@ -162,6 +164,7 @@ const PaymentSubscriptionPage = () => {
         full_name: full_name.trim(),
         contact_number: contact_number ? contact_number.trim() : '',
         subscription_type: billingCycle,
+        amount: subscriptionAmount,
         transaction_id: txRef.trim(),
         status: 'pending'
       };
@@ -184,22 +187,31 @@ const PaymentSubscriptionPage = () => {
         });
 
         logger.info('API response status:', response.status);
-        const data = await response.json();
+
+        let data;
+        try {
+          data = await response.json();
+        } catch {
+          throw new Error(`Server returned ${response.status}. Please try again or contact support.`);
+        }
 
         if (!response.ok || !data.success) {
           throw new Error(data.message || data.error || 'Failed to create pending subscription');
         }
         
-        setSuccess(true);
         setTransactionReference('');
-        
-        toast.success('Thank you! Your payment is under review. Our admin team will verify your payment and activate your account within 24 hours.', {
-          duration: 6000
+        setSubmitted(true);
+        setSubmittedData({
+          full_name: full_name.trim(),
+          email: email.trim(),
+          contact_number: contact_number ? contact_number.trim() : '',
+          subscription_type: billingCycle,
+          amount: subscriptionAmount,
+          transaction_id: txRef.trim(),
+          status: 'Pending',
+          date: data.created || new Date().toISOString(),
         });
-        
-        setTimeout(() => {
-          navigate(isLoggedIn ? '/dashboard' : '/');
-        }, 8000);
+        toast.success('Your upgrade request has been submitted for review.');
         
       } catch (err) {
         logger.error('Submission failed:', err);
@@ -247,6 +259,101 @@ const PaymentSubscriptionPage = () => {
     );
   }
 
+  if (submitted && submittedData) {
+    return (
+      <div className="min-h-screen flex flex-col bg-background">
+        <Helmet>
+          <title>Submission Successful | Temple Portal</title>
+        </Helmet>
+        <Header />
+        <main className="flex-1 flex items-center justify-center p-4 py-12">
+          <div className="w-full max-w-2xl space-y-8">
+            <Card className="border-green-200/50 shadow-xl overflow-hidden rounded-2xl bg-card">
+              <div className="h-1.5 bg-green-500 w-full" />
+              <CardHeader className="text-center space-y-2 pb-6 bg-green-50/50">
+                <div className="mx-auto w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-2">
+                  <CheckCircle className="w-8 h-8 text-green-600" />
+                </div>
+                <CardTitle className="text-2xl font-bold text-green-800" style={{ fontFamily: 'Playfair Display, serif' }}>
+                  Submission Successful!
+                </CardTitle>
+                <CardDescription className="text-base text-green-700 font-medium">
+                  Your premium membership request has been received
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-6 sm:p-8 space-y-6">
+                <div className="p-5 bg-green-50 border-2 border-green-200 rounded-xl space-y-4">
+                  <h3 className="text-lg font-bold text-green-900 text-center">Summary</h3>
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-center py-2 border-b border-green-100">
+                      <span className="text-sm text-green-700 font-medium">Full Name</span>
+                      <span className="text-sm font-semibold text-green-900">{submittedData.full_name}</span>
+                    </div>
+                    <div className="flex justify-between items-center py-2 border-b border-green-100">
+                      <span className="text-sm text-green-700 font-medium">Email</span>
+                      <span className="text-sm font-semibold text-green-900">{submittedData.email}</span>
+                    </div>
+                    {submittedData.contact_number && (
+                      <div className="flex justify-between items-center py-2 border-b border-green-100">
+                        <span className="text-sm text-green-700 font-medium">Contact Number</span>
+                        <span className="text-sm font-semibold text-green-900">{submittedData.contact_number}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between items-center py-2 border-b border-green-100">
+                      <span className="text-sm text-green-700 font-medium">Plan</span>
+                      <span className="text-sm font-semibold text-green-900">Premium {submittedData.subscription_type}</span>
+                    </div>
+                    <div className="flex justify-between items-center py-2 border-b border-green-100">
+                      <span className="text-sm text-green-700 font-medium">Amount</span>
+                      <span className="text-sm font-semibold text-green-900">€{submittedData.amount.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between items-center py-2 border-b border-green-100">
+                      <span className="text-sm text-green-700 font-medium">Transaction ID</span>
+                      <span className="text-sm font-mono font-semibold text-green-900">{submittedData.transaction_id}</span>
+                    </div>
+                    <div className="flex justify-between items-center py-2">
+                      <span className="text-sm text-green-700 font-medium">Status</span>
+                      <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 font-semibold">
+                        {submittedData.status}
+                      </Badge>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-6 bg-green-50 border-2 border-green-200 rounded-xl text-center space-y-3">
+                  <CheckCircle className="w-12 h-12 text-green-600 mx-auto" />
+                  <p className="text-lg font-bold text-green-900">
+                    Your Submission Successful
+                  </p>
+                  <p className="text-base text-green-700">
+                    Admin will approve. Thanks for contributing for Temple development.
+                  </p>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                  <Button
+                    onClick={() => navigate('/')}
+                    className="flex-1 h-12 text-base font-semibold bg-primary hover:bg-primary/90"
+                  >
+                    Go to Home
+                  </Button>
+                  <Button
+                    onClick={() => navigate('/dashboard')}
+                    variant="outline"
+                    className="flex-1 h-12 text-base font-semibold"
+                  >
+                    View Dashboard
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-background">
       <Helmet>
@@ -256,20 +363,6 @@ const PaymentSubscriptionPage = () => {
 
       <main className="flex-1 flex items-center justify-center p-4 py-12">
         <div className="w-full max-w-5xl space-y-8">
-          {success ? (
-            <Card className="border-primary/20 shadow-xl overflow-hidden rounded-2xl bg-card">
-              <div className="h-2 bg-emerald-500 w-full" />
-              <CardContent className="p-8 text-center space-y-4">
-                <div className="mx-auto w-16 h-16 bg-emerald-500/10 rounded-full flex items-center justify-center mb-4">
-                  <CheckCircle2 className="w-8 h-8 text-emerald-500" />
-                </div>
-                <CardTitle className="text-2xl font-bold">Payment Under Review!</CardTitle>
-                <CardDescription className="text-base pb-4">
-                  Thank you! Your payment is under review. Our admin team will verify your payment and activate your account within 24 hours. Redirecting to home...
-                </CardDescription>
-              </CardContent>
-            </Card>
-          ) : (
             <Card className="border-border/50 shadow-xl overflow-hidden rounded-2xl bg-card">
               <div className="h-1.5 bg-primary w-full" />
               <CardHeader className="text-center space-y-2 pb-6 bg-muted/10">
@@ -489,7 +582,6 @@ const PaymentSubscriptionPage = () => {
                 )}
               </CardContent>
             </Card>
-          )}
         </div>
       </main>
       <Footer />

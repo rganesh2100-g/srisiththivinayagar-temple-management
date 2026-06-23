@@ -4,7 +4,7 @@ onRecordAfterCreateSuccess((e) => {
   
   // Check if account_type is empty or null
   if (!accountType || accountType.trim() === "") {
-    e.record.set("account_type", "Free Membership");
+    e.record.set("account_type", "Free Member");
     $app.save(e.record);
   }
   

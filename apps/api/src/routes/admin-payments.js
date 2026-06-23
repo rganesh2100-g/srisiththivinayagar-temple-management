@@ -59,27 +59,34 @@ const generateReceiptId = () => {
  */
 router.get('/pending-payments', requireAdmin, async (req, res) => {
   logger.info('[ADMIN-PAYMENTS-PENDING] Fetching pending payments...');
-  const subscriptions = await pb.collection('subscriptions').getFullList({
+  const pendingSubscriptions = await pb.collection('pending_subscriptions').getFullList({
     filter: 'status="pending"',
-    expand: 'user',
+    expand: 'user,subscription',
     sort: '-created',
   });
 
-  const mappedSubscriptions = subscriptions.map((subscription) => {
-    const expandedUser = subscription.expand?.user || {};
+  const mappedSubscriptions = pendingSubscriptions.map((pendingSubscription) => {
+    const expandedUser = pendingSubscription.expand?.user || {};
+    const expandedSubscription = pendingSubscription.expand?.subscription || {};
     return {
-      id: subscription.id,
+      id: pendingSubscription.id,
+      subscription_id: expandedSubscription.id || pendingSubscription.subscription,
       user: {
-        id: expandedUser.id || subscription.user,
-        email: expandedUser.email || 'N/A',
-        name: expandedUser.name || 'N/A',
+        id: expandedUser.id || pendingSubscription.user,
+        email: expandedUser.email || pendingSubscription.email || 'N/A',
+        name: expandedUser.full_name || expandedUser.name || pendingSubscription.full_name || 'N/A',
       },
-      plan_type: subscription.plan_type || 'N/A',
-      amount: subscription.amount || 0,
-      total_amount: subscription.total_amount || subscription.amount || 0,
-      transaction_id: subscription.transaction_id || 'N/A',
-      transaction_ref: subscription.transaction_ref || 'N/A',
-      created: subscription.created,
+      full_name: pendingSubscription.full_name || expandedUser.full_name || expandedUser.name || 'N/A',
+      contact_number: pendingSubscription.contact_number || expandedUser.phone || 'N/A',
+      email: pendingSubscription.email || expandedUser.email || 'N/A',
+      plan_type: expandedSubscription.plan_type || pendingSubscription.subscription_type || 'premium',
+      subscription_type: pendingSubscription.subscription_type || expandedSubscription.billing_cycle || 'N/A',
+      amount: expandedSubscription.amount || 0,
+      total_amount: expandedSubscription.total_amount || expandedSubscription.amount || 0,
+      transaction_id: pendingSubscription.transaction_id || expandedSubscription.transaction_id || 'N/A',
+      transaction_ref: expandedSubscription.transaction_ref || pendingSubscription.transaction_id || 'N/A',
+      payment_status: pendingSubscription.payment_status,
+      created: pendingSubscription.created,
     };
   });
 
@@ -102,11 +109,16 @@ router.put('/:paymentId/approve', requireAdmin, async (req, res) => {
   logger.info(`[ADMIN-PAYMENTS-APPROVE] PUT request received for payment ${paymentId}`);
 
   let payment;
+  let pendingSubscription;
   try {
-    payment = await pb.collection('payments').getOne(paymentId);
+    pendingSubscription = await pb.collection('pending_subscriptions').getOne(paymentId, { expand: 'subscription' });
+    payment = pendingSubscription.expand?.subscription || await pb.collection('subscriptions').getOne(pendingSubscription.subscription);
   } catch (e) {
-    // Fallback: Check if it's a pending subscription acting as a payment record
-    payment = await pb.collection('subscriptions').getOne(paymentId);
+    try {
+      payment = await pb.collection('payments').getOne(paymentId);
+    } catch (paymentErr) {
+      payment = await pb.collection('subscriptions').getOne(paymentId);
+    }
   }
 
   if (!payment) {
@@ -114,39 +126,59 @@ router.put('/:paymentId/approve', requireAdmin, async (req, res) => {
   }
 
   // (a) Update payment status
-  const collectionName = payment.collectionName || 'payments';
-  const updatedPayment = await pb.collection(collectionName).update(paymentId, { 
-    status: 'approved',
-    admin_notes: admin_notes || 'Approved via admin explicit workflow'
-  });
+  const updatedPayment = pendingSubscription
+    ? await pb.collection('pending_subscriptions').update(paymentId, {
+        status: 'approved',
+        payment_status: 'completed',
+      })
+    : await pb.collection(payment.collectionName || 'payments').update(paymentId, {
+        status: 'approved',
+        admin_notes: admin_notes || 'Approved via admin explicit workflow'
+      });
 
   // (b) Get user_id
-  const userId = payment.user || payment.userId;
+  const userId = pendingSubscription?.user || payment.user || payment.userId;
   if (!userId) {
     return res.status(400).json({ error: 'Payment record is missing user association' });
   }
 
   // (c) Update user's account_type to 'Premium Membership'
-  logger.info(`[ADMIN-PAYMENTS-APPROVE] Upgrading user ${userId} to Premium Membership...`);
+  logger.info(`[ADMIN-PAYMENTS-APPROVE] Upgrading user ${userId} to premium membership...`);
   const updatedUser = await pb.collection('users').update(userId, { 
-    account_type: 'Premium Membership' 
+    account_type: 'Premium Member',
+    membership_type: 'premium',
+    subscription_status: 'premium',
+    premium_status: 'Active',
   });
 
   // (d) Create or update subscription record
   let finalSubscription;
-  const existingSubs = await pb.collection('subscriptions').getFullList({ filter: `user="${userId}"` });
-  
+  const existingSubs = pendingSubscription?.subscription
+    ? []
+    : await pb.collection('subscriptions').getFullList({ filter: `user_id="${userId}"` });
+  const durationMonths = payment.duration_months || (String(payment.billing_cycle || '').toLowerCase().includes('month') ? 1 : 12);
+  const startDate = new Date();
+  const endDate = new Date(startDate);
+  endDate.setMonth(endDate.getMonth() + durationMonths);
+
   const subPayload = {
     user: userId,
+    user_id: userId,
     plan_type: 'premium',
     status: 'active',
+    amount: payment.amount || payment.total_amount || 0,
     total_amount: payment.total_amount || payment.amount || 0,
     billing_cycle: payment.billing_cycle || 'yearly',
-    start_date: new Date().toISOString(),
-    end_date: new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString()
+    duration_months: durationMonths,
+    renewal_type: payment.renewal_type || 'manual',
+    start_date: startDate.toISOString(),
+    end_date: endDate.toISOString()
   };
 
-  if (existingSubs.length > 0) {
+  if (pendingSubscription?.subscription) {
+    finalSubscription = await pb.collection('subscriptions').update(pendingSubscription.subscription, subPayload);
+    logger.info(`[ADMIN-PAYMENTS-APPROVE] Approved linked subscription ${finalSubscription.id}`);
+  } else if (existingSubs.length > 0) {
     finalSubscription = await pb.collection('subscriptions').update(existingSubs[0].id, subPayload);
     logger.info(`[ADMIN-PAYMENTS-APPROVE] Updated existing subscription ${finalSubscription.id}`);
   } else {
@@ -157,7 +189,7 @@ router.put('/:paymentId/approve', requireAdmin, async (req, res) => {
   // (e) Return success response
   res.json({
     success: true,
-    message: 'Payment approved, user upgraded to Premium Membership',
+    message: 'Payment approved, user upgraded to premium membership',
     payment: updatedPayment,
     user: {
       id: updatedUser.id,
@@ -166,6 +198,44 @@ router.put('/:paymentId/approve', requireAdmin, async (req, res) => {
     },
     subscription: finalSubscription
   });
+});
+
+router.post('/reject-payment', requireAdmin, async (req, res) => {
+  const { payment_id, rejection_reason } = req.body;
+  if (!payment_id) return res.status(400).json({ error: 'payment_id required' });
+
+  try {
+    const pendingSubscription = await pb.collection('pending_subscriptions').getOne(payment_id);
+    const updatedPending = await pb.collection('pending_subscriptions').update(payment_id, {
+      status: 'rejected',
+    });
+
+    let updatedSubscription = null;
+    if (pendingSubscription.subscription) {
+      updatedSubscription = await pb.collection('subscriptions').update(pendingSubscription.subscription, {
+        status: 'rejected',
+        admin_notes: rejection_reason || 'Rejected by admin',
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Payment rejected',
+      payment: updatedPending,
+      subscription: updatedSubscription,
+    });
+  } catch (pendingErr) {
+    const payment = await pb.collection('subscriptions').update(payment_id, {
+      status: 'rejected',
+      admin_notes: rejection_reason || 'Rejected by admin',
+    });
+
+    return res.json({
+      success: true,
+      message: 'Payment rejected',
+      payment,
+    });
+  }
 });
 
 /**

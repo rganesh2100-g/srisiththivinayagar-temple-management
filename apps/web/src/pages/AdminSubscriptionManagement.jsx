@@ -50,7 +50,7 @@ const AdminSubscriptionManagement = () => {
     try {
       // Pass token both as query param (per instructions) and Authorization header (standard practice)
       // Note: The backend should handle expand='user,subscription' if it queries PocketBase directly.
-      const url = `/admin/pending-payments?token=${encodeURIComponent(token)}&expand=user,subscription`;
+      const url = `/admin-payments/pending-payments?token=${encodeURIComponent(token)}&expand=user,subscription`;
       const response = await apiServerClient.fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`
@@ -80,15 +80,14 @@ const AdminSubscriptionManagement = () => {
     
     setIsApproving(true);
     try {
-      const url = `/admin/approve-payment?token=${encodeURIComponent(token)}`;
+      const url = `/admin-payments/${selectedPaymentForApproval.id}/approve?token=${encodeURIComponent(token)}`;
       const response = await apiServerClient.fetch(url, {
-        method: 'POST',
+        method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          payment_id: selectedPaymentForApproval.id,
           admin_notes: approvalNotes
         })
       });
@@ -118,7 +117,7 @@ const AdminSubscriptionManagement = () => {
     
     setIsRejecting(true);
     try {
-      const url = `/admin/reject-payment?token=${encodeURIComponent(token)}`;
+      const url = `/admin-payments/reject-payment?token=${encodeURIComponent(token)}`;
       const response = await apiServerClient.fetch(url, {
         method: 'POST',
         headers: { 
@@ -217,6 +216,8 @@ const AdminSubscriptionManagement = () => {
           <TableHeader>
             <TableRow>
               <TableHead>User Email</TableHead>
+              <TableHead>Name</TableHead>
+              <TableHead>Contact</TableHead>
               <TableHead>Plan Type</TableHead>
               <TableHead>Amount</TableHead>
               <TableHead>Transaction ID</TableHead>
@@ -232,6 +233,8 @@ const AdminSubscriptionManagement = () => {
                   <TableCell className="font-medium text-foreground">
                     {userEmail}
                   </TableCell>
+                  <TableCell>{payment.full_name || payment.user?.name || 'N/A'}</TableCell>
+                  <TableCell>{payment.contact_number || 'N/A'}</TableCell>
                   <TableCell>
                     <Badge variant="secondary" className="capitalize">
                       {payment.plan_type || payment.subscription_type || 'Unknown'}
@@ -387,7 +390,7 @@ const AdminSubscriptionManagement = () => {
               <div className="flex justify-between items-center">
                 <span className="text-sm text-muted-foreground">User Email</span>
                 <span className="text-sm font-medium text-foreground">
-                  {selectedPaymentForApproval?.expand?.user?.email || selectedPaymentForApproval?.user_email}
+                  {selectedPaymentForApproval?.expand?.user?.email || selectedPaymentForApproval?.user_email || selectedPaymentForApproval?.email || selectedPaymentForApproval?.user?.email}
                 </span>
               </div>
               <div className="flex justify-between items-center">
@@ -448,7 +451,7 @@ const AdminSubscriptionManagement = () => {
               <div className="flex justify-between items-center">
                 <span className="text-sm text-muted-foreground">User Email</span>
                 <span className="text-sm font-medium text-foreground">
-                  {selectedPaymentForRejection?.expand?.user?.email || selectedPaymentForRejection?.user_email}
+                  {selectedPaymentForRejection?.expand?.user?.email || selectedPaymentForRejection?.user_email || selectedPaymentForRejection?.email || selectedPaymentForRejection?.user?.email}
                 </span>
               </div>
               <div className="flex justify-between items-center">

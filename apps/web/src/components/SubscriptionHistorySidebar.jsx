@@ -19,18 +19,11 @@ const SubscriptionHistorySidebar = ({ currentUser, onSubscriptionsLoaded }) => {
         setIsLoading(true);
         setError(null);
         
-        // Task 1 & 2: Debugging logs and correct filter syntax
-        const filterString = `user = "${currentUser.id}" || user_id = "${currentUser.id}"`;
-        console.log('[SubscriptionHistory] (1) currentUser.id:', currentUser.id);
-        console.log('[SubscriptionHistory] (2) raw filter string:', filterString);
-
         const records = await pb.collection('subscriptions').getFullList({
-          filter: filterString,
+          filter: `user = "${currentUser.id}"`,
           sort: '-created',
           $autoCancel: false
         });
-        
-        console.log('[SubscriptionHistory] (3) response from PocketBase:', records);
         
         setSubscriptions(records);
         if (onSubscriptionsLoaded) {
@@ -54,7 +47,7 @@ const SubscriptionHistorySidebar = ({ currentUser, onSubscriptionsLoaded }) => {
 
     // Set up real-time subscription listener
     pb.collection('subscriptions').subscribe('*', (e) => {
-      if (e.record.user === currentUser.id || e.record.user_id === currentUser.id) {
+      if (e.record.user_id === currentUser.id || e.record.user === currentUser.id) {
         setSubscriptions((prev) => {
           let newSubs = [...prev];
           if (e.action === 'create') {

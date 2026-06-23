@@ -15,8 +15,6 @@ export const useUpgradeStatus = () => {
     }
 
     try {
-      // Check subscriptions collection first for the most accurate status
-      // Note: Schema uses 'user' for the relation field
       const subRecords = await pb.collection('subscriptions').getList(1, 1, {
         filter: `user="${currentUser.id}"`,
         sort: '-created',

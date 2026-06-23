@@ -311,6 +311,13 @@ export default defineConfig({
 				path.join(path.resolve(__dirname, '../..'), 'node_modules'),
 			],
 		},
+		proxy: {
+			'/hcgi/api': {
+				target: 'http://localhost:3001',
+				changeOrigin: true,
+				rewrite: (path) => path.replace(/^\/hcgi\/api/, ''),
+			},
+		},
 	},
 	resolve: {
 		extensions: ['.jsx', '.js', '.tsx', '.ts', '.json',],
