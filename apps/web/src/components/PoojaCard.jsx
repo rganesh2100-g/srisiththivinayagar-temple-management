@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Clock, Euro } from 'lucide-react';
+import { Clock, Euro, Calendar } from 'lucide-react';
 
 const PoojaCard = ({ pooja }) => {
   return (
@@ -23,6 +23,39 @@ const PoojaCard = ({ pooja }) => {
         <h3 className="text-2xl font-bold font-heading text-foreground mb-4 line-clamp-2 text-balance leading-snug">
           {pooja.name}
         </h3>
+
+        {(() => {
+          const datesStr = pooja.available_dates || pooja.specificDates || pooja.dates;
+          const daysStr = pooja.specificDays || pooja.days;
+          let availabilityText = '';
+          
+          if (pooja.availabilityType === 'specificDaysRegularly' && daysStr) {
+            try {
+              const days = JSON.parse(daysStr);
+              if (Array.isArray(days) && days.length > 0) {
+                availabilityText = `Every ${days.join(', ')}`;
+              }
+            } catch {}
+          } else if (pooja.availabilityType === 'specificDate' && datesStr) {
+            try {
+              const dates = JSON.parse(datesStr);
+              if (Array.isArray(dates) && dates.length > 0) {
+                availabilityText = `${dates.slice(0, 2).join(', ')}${dates.length > 2 ? ` +${dates.length - 2} more` : ''}`;
+              }
+            } catch {
+              availabilityText = datesStr;
+            }
+          }
+          
+          if (!availabilityText) return null;
+          
+          return (
+            <div className="flex items-center gap-1.5 text-sm text-muted-foreground mb-3">
+              <Calendar className="w-4 h-4 text-primary/80 shrink-0" />
+              <span className="line-clamp-1">{availabilityText}</span>
+            </div>
+          );
+        })()}
         
         <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground mb-6">
           <div className="flex items-center gap-1.5 bg-background/80 backdrop-blur-sm px-3 py-1.5 rounded-md border border-border/50 shadow-sm">
