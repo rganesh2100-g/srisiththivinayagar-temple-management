@@ -9,6 +9,7 @@ import routes from './routes/index.js';
 import { errorMiddleware, authMiddleware } from './middleware/index.js';
 import logger from './utils/logger.js';
 import { setupAdminUsers } from './utils/adminUserSetup.js';
+import { autoArchivePoojas, startAutoArchiveScheduler } from './utils/autoArchivePoojas.js';
 
 const app = express();
 
@@ -128,6 +129,19 @@ app.listen(port, async () => {
 		logger.error('[MAIN] ✗ Error setting up admin users');
 		logger.error(`[MAIN]   - Error: ${error.message}`);
 	}
+
+	// Auto-archive expired poojas on server start
+	logger.info('[MAIN] Step 6: Running auto-archive check for expired poojas');
+	try {
+		const archived = await autoArchivePoojas();
+		logger.info(`[MAIN] ✓ Auto-archive check completed — ${archived} pooja(s) archived`);
+	} catch (error) {
+		logger.error('[MAIN] ✗ Error during auto-archive check');
+		logger.error(`[MAIN]   - Error: ${error.message}`);
+	}
+
+	// Schedule periodic auto-archive checks
+	startAutoArchiveScheduler();
 });
 
 export default app;

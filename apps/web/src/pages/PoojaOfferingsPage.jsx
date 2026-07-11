@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Search, FilterX, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { filterExpiredPoojas } from '@/utils/poojaUtils.js';
 
 const CATEGORIES = ['All', 'Daily', 'Special', 'Regular', 'Festival'];
 
@@ -47,11 +48,12 @@ const PoojaOfferingsPage = () => {
       });
 
       // Client-side price filtering since PocketBase doesn't support <= on numbers easily in all versions
-      const filtered = records.filter(p => {
+      let filtered = records.filter(p => {
         const price = p.price || p.donation_amount || 0;
         return price <= maxPrice[0];
       });
 
+      filtered = filterExpiredPoojas(filtered);
       setPoojas(filtered);
     } catch (err) {
       console.error('Error fetching poojas:', err);

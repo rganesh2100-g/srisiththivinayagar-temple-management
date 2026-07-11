@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import Header from '@/components/Header.jsx';
 import Footer from '@/components/Footer.jsx';
+import { filterExpiredPoojas } from '@/utils/poojaUtils.js';
 
 const PoojaSchedulePage = () => {
   const [poojas, setPoojas] = useState([]);
@@ -35,7 +36,7 @@ const PoojaSchedulePage = () => {
         $autoCancel: false
       });
 
-      setPoojas(poojasData.items);
+      setPoojas(filterExpiredPoojas(poojasData.items));
       setFestivals(festivalsData.items);
     } catch (err) {
       console.error('Error fetching schedule data:', err);

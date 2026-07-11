@@ -14,6 +14,7 @@ import { Calendar } from '@/components/ui/calendar';
 import { toast } from 'sonner';
 import { Loader2, Calendar as CalendarIcon, Clock, Info, AlertCircle } from 'lucide-react';
 import { verifyQueryExpand } from '@/lib/relationshipVerification.js';
+import { filterExpiredPoojas } from '@/utils/poojaUtils.js';
 
 const PoojaBookingPage = () => {
   const { t } = useTranslation();
@@ -41,7 +42,7 @@ const PoojaBookingPage = () => {
         sort: '-created',
         $autoCancel: false
       });
-      setPoojas(records.items);
+      setPoojas(filterExpiredPoojas(records.items));
     } catch (err) {
       console.error('Error fetching poojas:', err);
       setError(t('pooja.failedToLoad') || 'Failed to load poojas.');

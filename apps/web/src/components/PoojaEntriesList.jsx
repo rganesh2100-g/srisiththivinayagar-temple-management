@@ -16,7 +16,7 @@ const PoojaEntriesList = ({ onEditPooja, refreshTrigger }) => {
     try {
       console.log('[PoojaEntriesList] Fetching poojas list from database...');
       const records = await pb.collection('poojas').getFullList({
-        filter: 'is_deleted=false',
+        filter: 'published=true && is_archived=false && is_deleted=false',
         sort: '-created',
         $autoCancel: false
       });

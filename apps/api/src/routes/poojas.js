@@ -3,6 +3,32 @@ import express from 'express';
 import pb from '../utils/pocketbaseClient.js';
 import logger from '../utils/logger.js';
 
+function isPoojaExpired(pooja) {
+  if (pooja.is_archived || pooja.is_deleted) return true;
+
+  if (pooja.availabilityType === 'specificDate') {
+    let dates = [];
+    try {
+      dates = JSON.parse(pooja.dates || pooja.specificDates || '[]');
+    } catch {
+      return false;
+    }
+    if (!dates.length) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return dates.every(dateStr => {
+      const d = new Date(dateStr + 'T00:00:00');
+      return d < today;
+    });
+  }
+
+  return false;
+}
+
+function filterExpiredPoojas(poojas) {
+  return poojas.filter(p => !isPoojaExpired(p));
+}
+
 const router = express.Router();
 
 /**
@@ -71,6 +97,13 @@ router.get('/', async (req, res) => {
   } else {
     logger.info('[POOJAS] Step 2: Preview mode - no filtering applied');
     logger.info(`[POOJAS]   - Returning all ${results.length} published poojas`);
+  }
+
+  // Filter out expired poojas (all dates passed)
+  const beforeExpiredCount = results.length;
+  results = filterExpiredPoojas(results);
+  if (results.length !== beforeExpiredCount) {
+    logger.info(`[POOJAS]   - Filtered out ${beforeExpiredCount - results.length} expired pooja(s)`);
   }
 
   logger.info('[POOJAS] ========================================');
