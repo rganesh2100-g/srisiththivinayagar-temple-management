@@ -1,0 +1,1012 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// Sri Siththi Vinayagar Temple — PostgreSQL Database Schema
+// Source of truth: docs/POSTGRESQL_DATABASE_SPECIFICATION.md
+// ═══════════════════════════════════════════════════════════════════════════════
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENUMS (25 total — from spec Part 7)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+enum UserRole {
+  user
+  admin
+}
+
+enum MembershipTier {
+  free
+  premium
+}
+
+enum SubscriptionStatus {
+  free
+  premium
+  admin
+}
+
+enum PremiumStatus {
+  Active
+  Inactive
+  Pending
+}
+
+enum ApprovalStatus {
+  pending_approval
+  approved
+  rejected
+}
+
+enum AccountType {
+  free_member
+  premium_member
+  admin
+}
+
+enum PreferredLanguage {
+  Tamil
+  English
+  Deutsch
+}
+
+enum FontSizePreference {
+  small
+  normal
+  large
+}
+
+enum NotificationPreference {
+  all
+  important
+  none
+}
+
+enum PoojaCategory {
+  daily
+  special
+  festival
+  life_cycle
+  homam
+  archana
+}
+
+enum PoojaStatus {
+  active
+  inactive
+  archived
+  draft
+}
+
+enum BookingStatus {
+  pending
+  approved
+  rejected
+  confirmed
+  cancelled
+  completed
+}
+
+enum PaymentStatus {
+  pending
+  completed
+  failed
+  refunded
+}
+
+enum SubscriptionPlanType {
+  premium
+}
+
+enum SubscriptionRecordStatus {
+  pending
+  active
+  rejected
+}
+
+enum RenewalType {
+  auto
+  manual
+}
+
+enum PaymentApprovalStatus {
+  pending
+  approved
+  rejected
+}
+
+enum ApprovalLogAction {
+  approved
+  rejected
+  restored
+  deleted
+}
+
+enum FestivalStatus {
+  active
+  archived
+}
+
+enum BookingMessageSenderType {
+  admin
+  user
+}
+
+enum SubscriptionReminderStatus {
+  pending
+  sent
+  failed
+}
+
+enum AiMessageRole {
+  user
+  assistant
+}
+
+enum PageAccessLevel {
+  view
+  edit
+  admin
+}
+
+enum SubscriptionType {
+  Monthly
+  Yearly
+}
+
+enum VolunteerStatus {
+  completed
+  pending
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MODELS (34 tables — dependency order)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. users — Core auth + profile (34 columns)
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECK: length(name) >= 2
+// CHECK: length(pincode) = 6 (when not null)
+model User {
+  id                     String               @id @default(uuid()) @db.VarChar(36)
+  email                  String               @unique @db.VarChar(320)
+  name                   String               @db.VarChar(100)
+  password               String               @db.VarChar(255)
+  avatar                 String?              @db.Text
+  verified               Boolean              @default(false)
+  emailVisibility        Boolean              @default(false) @map("emailVisibility")
+  tokenKey               String?              @unique @db.VarChar(255)
+  lastResetSentAt        DateTime?            @map("lastResetSentAt")
+  lastVerificationSentAt DateTime?            @map("lastVerificationSentAt")
+  role                   UserRole             @default(user)
+  membershipTier         MembershipTier       @default(free)
+  membershipType         MembershipTier       @default(free)
+  subscriptionStatus     SubscriptionStatus   @default(free)
+  premiumStatus          PremiumStatus        @default(Inactive)
+  approvalStatus         ApprovalStatus       @default(pending_approval)
+  accountType            AccountType          @default(free_member)
+  phone                  String?              @db.VarChar(15)
+  address                String?              @db.VarChar(200)
+  city                   String?              @db.VarChar(50)
+  state                  String?              @db.VarChar(50)
+  pincode                String?              @db.VarChar(6)
+  preferredLanguage      PreferredLanguage?
+  fontSizePreference     FontSizePreference   @default(normal)
+  joinDate               DateTime             @default(now())
+  subscriptionExpiryDate DateTime?
+  lastRenewalDate        DateTime?
+  isBlocked              Boolean              @default(false)
+  blockedAt              DateTime?
+  isDeleted              Boolean              @default(false)
+  deletedAt              DateTime?
+  archived               Boolean              @default(false)
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+
+  // Relations
+  poojaBookings            PoojaBooking[]
+  donations                Donation[]
+  subscriptions            Subscription[]
+  pendingSubscriptions     PendingSubscription[]
+  payments                 Payment[]
+  paymentsApprovedBy       Payment[]              @relation("PaymentApprover")
+  approvalLogs             ApprovalLog[]
+  userPreferences          UserPreference[]
+  integratedAiMessages     IntegratedAiMessage[]
+  auditLogsPerformed       AuditLog[]             @relation("AuditPerformer")
+
+  @@index([role])
+  @@index([membershipTier])
+  @@index([approvalStatus])
+  @@index([accountType])
+  @@index([isDeleted])
+  @@index([isBlocked])
+  @@index([createdAt])
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. account_types — Account type definitions
+// ─────────────────────────────────────────────────────────────────────────────
+model AccountTypeRecord {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  name        String   @unique @db.VarChar(255)
+  description String?  @db.Text
+  permissions Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("account_types")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. expense_categories — Expense classification
+// ─────────────────────────────────────────────────────────────────────────────
+model ExpenseCategory {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  name        String   @unique @db.VarChar(255)
+  description String?  @db.Text
+  createdBy   String?  @db.VarChar(255)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  expenses Expense[]
+
+  @@map("expense_categories")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. photo_categories — Gallery category classification
+// ─────────────────────────────────────────────────────────────────────────────
+model PhotoCategory {
+  id               String   @id @default(uuid()) @db.VarChar(36)
+  name             String   @unique @db.VarChar(255)
+  description      String?  @db.Text
+  createdBy        String?  @db.VarChar(255)
+  defaultExpanded  Boolean  @default(false)
+  isPublished      Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  galleryItems Gallery[]
+
+  @@map("photo_categories")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. festivals — Temple festivals
+// ─────────────────────────────────────────────────────────────────────────────
+model Festival {
+  id          String         @id @default(uuid()) @db.VarChar(36)
+  name        String         @db.VarChar(255)
+  description String?        @db.Text
+  date        DateTime?      @db.Date
+  status      FestivalStatus?
+  image       String?        @db.VarChar(500)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  // Relations
+  poojas Pooja[]
+
+  @@index([status])
+  @@map("festivals")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. payment_accounts — Bank account / QR code config
+// ─────────────────────────────────────────────────────────────────────────────
+model PaymentAccount {
+  id           String   @id @default(uuid()) @db.VarChar(36)
+  accountName  String   @db.VarChar(255)
+  bankName     String   @db.VarChar(255)
+  accountNumber String  @db.VarChar(50)
+  email        String   @db.VarChar(320)
+  qrCode       String?  @db.VarChar(500)
+  iban         String?  @db.VarChar(50)
+  paymentLink  String?  @db.VarChar(500)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("payment_accounts")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. bank_account_config — Bank account configuration
+// ─────────────────────────────────────────────────────────────────────────────
+model BankAccountConfig {
+  id                String   @id @default(uuid()) @db.VarChar(36)
+  bankName          String   @db.VarChar(255)
+  accountHolderName String   @db.VarChar(255)
+  accountNumber     String   @db.VarChar(50)
+  iban              String?  @db.VarChar(50)
+  contactEmail      String   @db.VarChar(320)
+  directPaymentLink String?  @db.VarChar(500)
+  qrCodeImage       String?  @db.VarChar(500)
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("bank_account_config")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. contact_inquiries — Contact form submissions
+// ─────────────────────────────────────────────────────────────────────────────
+model ContactInquiry {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  name      String   @db.VarChar(255)
+  email     String   @db.VarChar(320)
+  phone     String?  @db.VarChar(15)
+  subject   String   @db.VarChar(255)
+  message   String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("contact_inquiries")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. poojas — Temple services/events catalog
+// ─────────────────────────────────────────────────────────────────────────────
+model Pooja {
+  id               String        @id @default(uuid()) @db.VarChar(36)
+  name             String        @db.VarChar(255)
+  description      String?       @db.Text
+  category         PoojaCategory @default(daily)
+  donationAmount   Decimal       @db.Decimal(10, 2)
+  price            Decimal?      @db.Decimal(10, 2)
+  availabilityType String?       @db.VarChar(50)
+  dates            Json?
+  days             Json?
+  specificDates    Json?
+  specificDays     Json?
+  timeSlots        Json?
+  status           PoojaStatus   @default(active)
+  isArchived       Boolean       @default(false)
+  archivedAt       DateTime?
+  isDeleted        Boolean       @default(false)
+  festivalId       String?       @db.VarChar(36)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  // Relations
+  festival   Festival?        @relation(fields: [festivalId], references: [id], onDelete: SetNull)
+  bookings   PoojaBooking[]
+
+  @@index([category])
+  @@index([status])
+  @@index([isArchived])
+  @@index([isDeleted])
+  @@index([festivalId])
+  @@index([category, status])
+  @@map("poojas")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. pooja_bookings — User bookings for temple services (23 columns)
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECK: donationAmount >= 1
+model PoojaBooking {
+  id               String            @id @default(uuid()) @db.VarChar(36)
+  userId           String            @db.VarChar(36)
+  poojaId          String            @db.VarChar(36)
+  name             String            @db.VarChar(255)
+  email            String            @db.VarChar(320)
+  userContact      String?           @db.VarChar(15)
+  phone            String?           @db.VarChar(15)
+  bookingDate      DateTime?
+  poojaDate        DateTime?
+  timeSlot         String?           @db.VarChar(50)
+  selectedDate     String?           @db.VarChar(50)
+  selectedTimeSlot String?           @db.VarChar(50)
+  donationAmount   Decimal           @db.Decimal(10, 2)
+  bookingStatus    BookingStatus     @default(pending)
+  paymentStatus    PaymentStatus?
+  status           String?           @db.VarChar(50)
+  receiptNumber    String?           @unique @db.VarChar(50)
+  transactionId    String?           @db.VarChar(100)
+  notes            String?           @db.Text
+  poojaName        String?           @db.VarChar(255)
+  bookingTime      DateTime?
+  isDeleted        Boolean           @default(false)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  // Relations
+  user             User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  pooja            Pooja             @relation(fields: [poojaId], references: [id], onDelete: Restrict)
+  bookingMessages  BookingMessage[]
+
+  @@index([userId])
+  @@index([poojaId])
+  @@index([bookingStatus])
+  @@index([isDeleted])
+  @@index([userId, bookingStatus])
+  @@index([createdAt])
+  @@map("pooja_bookings")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. booking_messages — Chat per booking
+// ─────────────────────────────────────────────────────────────────────────────
+model BookingMessage {
+  id            String                  @id @default(uuid()) @db.VarChar(36)
+  bookingId     String                  @db.VarChar(36)
+  senderType    BookingMessageSenderType
+  senderEmail   String                  @db.VarChar(320)
+  messageContent String                 @db.Text
+  readStatus    Boolean                 @default(false)
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  // Relations
+  booking PoojaBooking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@map("booking_messages")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 12. donations — User donations (18 columns)
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECK: amount > 0
+model Donation {
+  id                      String                 @id @default(uuid()) @db.VarChar(36)
+  userId                  String                 @db.VarChar(36)
+  amount                  Decimal                @db.Decimal(10, 2)
+  donationDate            DateTime?
+  donationDescription     String?                @db.Text
+  specialOccasion         String?                @db.VarChar(255)
+  category                String?                @db.VarChar(100)
+  status                  PaymentApprovalStatus? @default(pending)
+  approvalDate            DateTime?
+  paymentStatus           PaymentStatus?
+  receiptNumber           String?                @unique @db.VarChar(50)
+  receiptPdf              String?                @db.VarChar(500)
+  receiptGeneratedAt      DateTime?
+  contactNumber           String?                @db.VarChar(15)
+  email                   String?                @db.VarChar(320)
+  communicationPreference String?                @db.VarChar(50)
+  isDeleted               Boolean                @default(false)
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([status])
+  @@index([isDeleted])
+  @@index([userId, status])
+  @@index([userId, donationDate])
+  @@index([createdAt])
+  @@map("donations")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 13. subscriptions — Premium membership subscriptions (18 columns)
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECK: amount >= 0, totalAmount >= 0
+// CHECK: durationMonths >= 1 AND durationMonths <= 120
+// CHECK: endDate > startDate
+model Subscription {
+  id              String                    @id @default(uuid()) @db.VarChar(36)
+  userId          String                    @db.VarChar(36)
+  planType        SubscriptionPlanType      @default(premium)
+  amount          Decimal                   @db.Decimal(10, 2)
+  billingCycle    String                    @db.VarChar(100)
+  customDonation  Decimal?                  @db.Decimal(10, 2)
+  totalAmount     Decimal                   @db.Decimal(10, 2)
+  durationMonths  Int
+  renewalType     RenewalType
+  startDate       DateTime
+  endDate         DateTime
+  status          SubscriptionRecordStatus  @default(pending)
+  transactionId   String?                   @db.VarChar(100)
+  transactionRef  String?                   @db.VarChar(100)
+  adminNotes      String?                   @db.Text
+  description     String?                   @db.Text
+  userIdText      String?                   @db.VarChar(100)
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+
+  // Relations
+  user                User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  pendingSubscriptions PendingSubscription[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([planType])
+  @@index([endDate])
+  @@index([userId, status])
+  @@map("subscriptions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 14. pending_subscriptions — Subscription approval queue
+// ─────────────────────────────────────────────────────────────────────────────
+model PendingSubscription {
+  id               String            @id @default(uuid()) @db.VarChar(36)
+  email            String            @db.VarChar(320)
+  fullName         String            @db.VarChar(255)
+  contactNumber    String            @db.VarChar(15)
+  subscriptionType String            @db.VarChar(50)
+  transactionId    String            @db.VarChar(100)
+  userId           String            @db.VarChar(36)
+  subscriptionId   String            @db.VarChar(36)
+  status           BookingStatus     @default(pending)
+  paymentStatus    PaymentStatus
+  startDate        DateTime
+  endDate          DateTime
+  renewalDate      DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  // Relations
+  user         User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([subscriptionId])
+  @@index([status])
+  @@index([paymentStatus])
+  @@map("pending_subscriptions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 15. payments — Payment records (26 columns)
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECK: amount > 0, totalAmount > 0
+model Payment {
+  id               String                 @id @default(uuid()) @db.VarChar(36)
+  userId           String                 @db.VarChar(36)
+  approvedById     String?                @db.VarChar(36)
+  amount           Decimal                @db.Decimal(10, 2)
+  totalAmount      Decimal                @db.Decimal(10, 2)
+  customDonation   Decimal?               @db.Decimal(10, 2)
+  planType         String?                @db.VarChar(50)
+  billingCycle     String                 @db.VarChar(100)
+  subscriptionType String?                @db.VarChar(50)
+  startDate        DateTime
+  endDate          DateTime
+  status           PaymentApprovalStatus?
+  paymentStatus    PaymentStatus?
+  transactionId    String?                @db.VarChar(100)
+  transactionRef   String?                @db.VarChar(100)
+  paymentMethod    String?                @db.VarChar(50)
+  receiptPdf       String?                @db.VarChar(500)
+  receiptId        String?                @db.VarChar(100)
+  receiptNumber    String?                @unique @db.VarChar(50)
+  receiptGeneratedAt DateTime?
+  receiptSentAt    DateTime?
+  resendReceipt    Boolean                @default(false)
+  adminNotes       String?                @db.Text
+  approvedAt       DateTime?
+  email            String                 @db.VarChar(320)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  // Relations
+  user         User  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  approvedBy   User? @relation("PaymentApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status])
+  @@index([userId, status])
+  @@index([createdAt])
+  @@map("payments")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 16. approval_logs — Subscription approval audit trail
+// ─────────────────────────────────────────────────────────────────────────────
+model ApprovalLog {
+  id        String              @id @default(uuid()) @db.VarChar(36)
+  adminId   String              @db.VarChar(36)
+  adminName String              @db.VarChar(255)
+  action    ApprovalLogAction
+  timestamp DateTime            @default(now())
+  notes     String?             @db.Text
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  // Relations
+  admin User @relation(fields: [adminId], references: [id], onDelete: Restrict)
+
+  @@index([adminId])
+  @@index([action])
+  @@index([timestamp])
+  @@map("approval_logs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 17. temple_accounts — Financial ledger entries (23 columns)
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECK: amount >= 0
+model TempleAccount {
+  id                      String           @id @default(uuid()) @db.VarChar(36)
+  memberName              String           @db.VarChar(255)
+  amount                  Decimal          @db.Decimal(10, 2)
+  category                String           @db.VarChar(100)
+  date                    DateTime         @db.Date
+  month                   String?          @db.VarChar(20)
+  year                    Int?
+  classification          String           @db.VarChar(100)
+  description             String?          @db.Text
+  transactionId           String           @db.VarChar(100)
+  subscriptionId          String?          @db.VarChar(100)
+  status                  String?          @db.VarChar(50)
+  notes                   String?          @db.Text
+  entryType               String?          @db.VarChar(50)
+  subscriptionType        SubscriptionType?
+  annadhanamAmount        Decimal?         @db.Decimal(10, 2)
+  templeMaintenanceAmount Decimal?         @db.Decimal(10, 2)
+  goshalaAmount           Decimal?         @db.Decimal(10, 2)
+  vedaPathshalaAmount     Decimal?         @db.Decimal(10, 2)
+  generalFundAmount       Decimal?         @db.Decimal(10, 2)
+  totalAmount             Decimal?         @db.Decimal(10, 2)
+  poojaServicesAmount     Decimal?         @db.Decimal(10, 2)
+  createdAt               DateTime         @default(now())
+  updatedAt               DateTime         @updatedAt
+
+  @@index([category])
+  @@index([date])
+  @@index([month, year])
+  @@index([classification])
+  @@index([createdAt])
+  @@map("temple_accounts")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 18. expenses — Temple expense records
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECK: amount >= 0.01
+// CHECK: quantity >= 0 (when not null)
+model Expense {
+  id             String        @id @default(uuid()) @db.VarChar(36)
+  categoryId     String        @db.VarChar(36)
+  amount         Decimal       @db.Decimal(10, 2)
+  date           DateTime      @db.Date
+  paidTo         String?       @db.VarChar(255)
+  paymentMethod  String?       @db.VarChar(50)
+  billFile       String?       @db.VarChar(500)
+  createdBy      String        @db.VarChar(255)
+  quantity       Int?
+  classification String?       @db.VarChar(100)
+  voucherId      String?       @db.VarChar(100)
+  description    String?       @db.Text
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  // Relations
+  category   ExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  vouchers   Voucher[]
+
+  @@index([categoryId])
+  @@index([date])
+  @@index([createdAt])
+  @@map("expenses")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 19. classifications — Expense sub-classification
+// ─────────────────────────────────────────────────────────────────────────────
+model Classification {
+  id              String            @id @default(uuid()) @db.VarChar(36)
+  name            String            @unique @db.VarChar(255)
+  description     String?           @db.Text
+  createdBy       String?           @db.VarChar(255)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@map("classifications")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 20. membership_fees — Membership payment records
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECK: amount >= 0
+// Note: userId is VARCHAR(100) — legacy text FK from PocketBase
+model MembershipFee {
+  id             String    @id @default(uuid()) @db.VarChar(36)
+  userId         String    @db.VarChar(100)
+  amount         Decimal   @db.Decimal(10, 2)
+  signupDate     DateTime  @db.Date
+  createdAtField DateTime? @default(now())
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("membership_fees")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 21. gallery — Media library
+// ─────────────────────────────────────────────────────────────────────────────
+model Gallery {
+  id          String        @id @default(uuid()) @db.VarChar(36)
+  title       String        @db.VarChar(255)
+  description String?       @db.Text
+  image       String?       @db.VarChar(500)
+  uploadedBy  String?       @db.VarChar(255)
+  order       Int?
+  categoryId  String?       @db.VarChar(36)
+  isPublished Boolean       @default(false)
+  archived    Boolean       @default(false)
+  storageSize Int?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  // Relations
+  category PhotoCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@index([categoryId])
+  @@index([isPublished])
+  @@index([order])
+  @@map("gallery")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 22. volunteer_participation — Volunteer event tracking
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECK: hours >= 0
+// Note: userId is VARCHAR(100) — legacy text FK
+model VolunteerParticipation {
+  id                String           @id @default(uuid()) @db.VarChar(36)
+  userId            String           @db.VarChar(100)
+  eventName         String           @db.VarChar(255)
+  participationDate DateTime         @db.Date
+  hours             Int?
+  status            VolunteerStatus?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([userId])
+  @@map("volunteer_participation")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 23. admin_messages — Admin-to-user communications
+// ─────────────────────────────────────────────────────────────────────────────
+// Note: userId is VARCHAR(100) — legacy text FK
+model AdminMessage {
+  id                   String              @id @default(uuid()) @db.VarChar(36)
+  userId               String              @db.VarChar(100)
+  message              String              @db.Text
+  languagePreference   PreferredLanguage?
+  sentDate             DateTime?           @default(now())
+  readStatus           Boolean             @default(false)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  @@index([userId])
+  @@map("admin_messages")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 24. user_preferences — Per-user settings
+// ─────────────────────────────────────────────────────────────────────────────
+// Note: userId is VARCHAR(100) — legacy text FK, UNIQUE
+model UserPreference {
+  id                       String                 @id @default(uuid()) @db.VarChar(36)
+  userId                   String                 @unique @db.VarChar(100)
+  preferredLanguage        PreferredLanguage?
+  communicationLanguage    String?                @db.VarChar(50)
+  notificationPreference   NotificationPreference?
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("user_preferences")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 25. subscription_reminders — Expiry notification tracking
+// ─────────────────────────────────────────────────────────────────────────────
+// Note: subscriptionId is VARCHAR(100) — legacy text FK
+model SubscriptionReminder {
+  id             String                      @id @default(uuid()) @db.VarChar(36)
+  email          String                      @db.VarChar(320)
+  subscriptionId String                      @db.VarChar(100)
+  reminderDate   DateTime                    @db.Date
+  sentDate       DateTime?
+  status         SubscriptionReminderStatus?
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+
+  @@index([email])
+  @@index([status])
+  @@map("subscription_reminders")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 26. page_access — Per-user page permissions
+// ─────────────────────────────────────────────────────────────────────────────
+// Note: userId is VARCHAR(100) — legacy text FK
+model PageAccess {
+  id          String          @id @default(uuid()) @db.VarChar(36)
+  userId      String          @db.VarChar(100)
+  pageRoute   String          @db.VarChar(255)
+  accessLevel PageAccessLevel @default(view)
+  grantedAt   DateTime?       @default(now())
+  grantedBy   String?         @db.VarChar(100)
+  isActive    Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([userId])
+  @@index([pageRoute])
+  @@map("page_access")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 27. premium_upgrade_requests — Upgrade application queue
+// ─────────────────────────────────────────────────────────────────────────────
+model PremiumUpgradeRequest {
+  id             String                 @id @default(uuid()) @db.VarChar(36)
+  email          String                 @db.VarChar(320)
+  transactionId  String                 @db.VarChar(100)
+  status         PaymentApprovalStatus?
+  membershipType String                 @db.VarChar(50)
+  adminNotes     String?                @db.Text
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  @@index([email])
+  @@index([status])
+  @@map("premium_upgrade_requests")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 28. _integrated_ai_messages — AI chat history
+// ─────────────────────────────────────────────────────────────────────────────
+// Note: userId is VARCHAR(100) — legacy text FK, nullable for anonymous
+model IntegratedAiMessage {
+  id        String        @id @default(uuid()) @db.VarChar(36)
+  userId    String?       @db.VarChar(100)
+  role      AiMessageRole
+  content   Json
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("_integrated_ai_messages")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 29. _integrated_ai_images — AI-generated images
+// ─────────────────────────────────────────────────────────────────────────────
+model IntegratedAiImage {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  file      String   @db.VarChar(500)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("_integrated_ai_images")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 30. notifications — In-app notifications
+// ─────────────────────────────────────────────────────────────────────────────
+// Note: userId is VARCHAR(100) — legacy text FK
+model Notification {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  userId    String   @db.VarChar(100)
+  title     String   @db.VarChar(255)
+  message   String   @db.Text
+  type      String   @db.VarChar(50)
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([isRead])
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 31. vouchers — Expense vouchers
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECK: amount >= 0
+model Voucher {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  voucherId   String   @unique @db.VarChar(100)
+  expenseId   String?  @db.VarChar(36)
+  amount      Decimal  @db.Decimal(10, 2)
+  category    String?  @db.VarChar(100)
+  paidTo      String?  @db.VarChar(255)
+  date        DateTime? @db.Date
+  description String?  @db.Text
+  status      String?  @db.VarChar(50)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  expense Expense? @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+
+  @@index([expenseId])
+  @@map("vouchers")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 32. audit_logs — System-wide audit trail (NEW — no PB equivalent)
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECK: action IN ('create', 'update', 'delete', 'approve', 'reject')
+// Note: No updatedAt — immutable audit record
+model AuditLog {
+  id          String    @id @default(uuid()) @db.VarChar(36)
+  entityType  String    @db.VarChar(50)
+  entityId    String    @db.VarChar(36)
+  action      String    @db.VarChar(20)
+  changes     Json?
+  performedBy String?   @db.VarChar(36)
+  performedAt DateTime  @default(now())
+  ipAddress   String?   @db.VarChar(45)
+  userAgent   String?   @db.VarChar(500)
+  createdAt   DateTime  @default(now())
+
+  // Relations
+  performedByUser User? @relation("AuditPerformer", fields: [performedBy], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([performedBy])
+  @@index([performedAt])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 33. email_queue — Email delivery queue (NEW — no PB equivalent)
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECK: status IN ('pending', 'processing', 'sent', 'failed', 'dead')
+// CHECK: attempts >= 0 AND attempts <= 3
+model EmailQueue {
+  id            String    @id @default(uuid()) @db.VarChar(36)
+  to            String    @db.VarChar(320)
+  subject       String    @db.VarChar(500)
+  body          String    @db.Text
+  attachments   Json?
+  status        String    @default("pending") @db.VarChar(20)
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime?
+  lastError     String?   @db.Text
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@map("email_queue")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 34. email_dead_letter — Failed emails for manual review (NEW — no PB equivalent)
+// ─────────────────────────────────────────────────────────────────────────────
+// Note: No updatedAt — immutable dead letter record
+model EmailDeadLetter {
+  id               String   @id @default(uuid()) @db.VarChar(36)
+  to               String   @db.VarChar(320)
+  subject          String   @db.VarChar(500)
+  body             String   @db.Text
+  attachments      Json?
+  error            String   @db.Text
+  attempts         Int
+  originalCreatedAt DateTime
+  createdAt        DateTime @default(now())
+
+  @@map("email_dead_letter")
+}
