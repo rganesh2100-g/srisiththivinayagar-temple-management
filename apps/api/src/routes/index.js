@@ -4,6 +4,8 @@ import integratedAiRouter from './integrated-ai.js';
 import adminPaymentsRouter from './admin-payments.js';
 import poojaBookingRouter from './poojaBooking.js';
 import pendingSubscriptionsRouter from './pendingSubscriptions.js';
+import authRouter from './auth.js';
+import usersRouter from './users.js';
 
 export default () => {
   const router = Router();
@@ -12,5 +14,7 @@ export default () => {
   router.use('/admin-payments', adminPaymentsRouter);
   router.use('/pooja-bookings', poojaBookingRouter);
   router.use('/pending-subscriptions', pendingSubscriptionsRouter);
+  router.use('/auth', authRouter);
+  router.use('/users', usersRouter);
   return router;
 };

@@ -186,6 +186,7 @@ async function seedAdminUsers(tx, tracker) {
       approvalStatus: admin.approvalStatus,
       accountType: admin.accountType,
       password: hashedPassword,
+      pocketbaseId: admin.pocketbaseId || null,
     };
 
     await upsertRecord(tx, 'user', 'email', admin.email, createData, updateData, tracker);

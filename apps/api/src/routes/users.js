@@ -1,130 +1,170 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// users routes — admin user management (H3 Users/Auth slice)
+//
+// GET  /users          → admin paginated list of users
+// PUT  /users/:id/role → admin role update (dual-write PG + PocketBase)
+//
+// Dual-write contract: PG commit first, then mirror the role to PocketBase.
+// If the PB mirror fails, revert the PG role and return 500. This guarantees
+// PG and PB stay consistent because the frontend still reads users from PB
+// for list pages during the transition.
+// ═══════════════════════════════════════════════════════════════════════════════
+
 import 'dotenv/config';
-import express from 'express';
-import pb from '../utils/pocketbaseClient.js';
+import { Router } from 'express';
 import logger from '../utils/logger.js';
+import pb from '../utils/pocketbaseClient.js';
+import UserRepository from '../repositories/UserRepository.js';
+import { requireAdmin } from '../middleware/requireAuth.js';
+import { normalizeRole } from '../constants/enumMappings.js';
 
-const router = express.Router();
+const router = Router();
+const userRepo = new UserRepository();
 
-logger.info('[USERS-ROUTES] ========================================');
-logger.info('[USERS-ROUTES] Initializing Users Routes');
-logger.info('[USERS-ROUTES] ========================================');
+// Public fields for the admin list page (AdminRoleManagement.jsx contract).
+const LIST_FIELDS = {
+  id: true,
+  pocketbaseId: true,
+  email: true,
+  name: true,
+  role: true,
+  verified: true,
+  membershipTier: true,
+  isBlocked: true,
+  isDeleted: true,
+  createdAt: true,
+};
 
 /**
- * GET /users - Fetch all registered users grouped by tier
- *
- * Requires: Admin authentication (req.user.role === 'admin')
- *
- * Response: {
- *   adminUsers: [...],
- *   freeUsers: [...],
- *   premiumUsers: [...],
- *   counts: { admin: N, free: N, premium: N }
- * }
+ * Map a Prisma user row to the frontend list shape.
+ * Preserves both `name` and `full_name` (AdminRoleManagement reads either).
  */
-router.get('/', async (req, res) => {
-  logger.info('[USERS-GET] ========================================');
-  logger.info('[USERS-GET] GET / - Fetch all users request received');
-  logger.info('[USERS-GET] ========================================');
-  logger.info(`[USERS-GET] Timestamp: ${new Date().toISOString()}`);
-
-  // Step 1: Check authentication
-  logger.info('[USERS-GET] Step 1: Checking authentication');
-
-  if (!req.user) {
-    logger.error('[USERS-GET] ✗ Authentication check FAILED: User is not authenticated');
-    logger.error('[USERS-GET]   - req.user is undefined');
-    logger.info('[USERS-GET] ========================================');
-    throw new Error('Unauthorized: User not authenticated');
-  }
-
-  logger.info('[USERS-GET] ✓ User is authenticated');
-  logger.info(`[USERS-GET]   - User ID: ${req.user.id}`);
-  logger.info(`[USERS-GET]   - User email: ${req.user.email}`);
-  logger.info(`[USERS-GET]   - User role: ${req.user.role}`);
-
-  // Step 2: Check admin role
-  logger.info('[USERS-GET] Step 2: Checking admin authorization');
-
-  if (req.user.role !== 'admin') {
-    logger.error('[USERS-GET] ✗ Authorization check FAILED: User is not admin');
-    logger.error(`[USERS-GET]   - User role: "${req.user.role}"`);
-    logger.error('[USERS-GET]   - Required role: "admin"');
-    logger.info('[USERS-GET] ========================================');
-    throw new Error('Unauthorized: Admin role required');
-  }
-
-  logger.info('[USERS-GET] ✓ Admin authorization verified');
-  logger.info('[USERS-GET]   - User has admin role');
-
-  // Step 3: Fetch all users from PocketBase
-  logger.info('[USERS-GET] Step 3: Fetching all users from PocketBase');
-  logger.info('[USERS-GET]   - Collection: users');
-  logger.info('[USERS-GET]   - Fields: id, email, role, membership_tier, created');
-
-  const users = await pb.collection('users').getFullList({
-    fields: 'id,email,name,role,membership_tier,created',
-    sort: '-created',
-  });
-
-  logger.info('[USERS-GET] ✓ Users fetched successfully from PocketBase');
-  logger.info(`[USERS-GET]   - Total users: ${users.length}`);
-
-  // Step 4: Group users by tier
-  logger.info('[USERS-GET] Step 4: Grouping users by tier');
-
-  const adminUsers = [];
-  const freeUsers = [];
-  const premiumUsers = [];
-
-  users.forEach((user) => {
-    const userObj = {
-      id: user.id,
-      email: user.email,
-      name: user.name || 'N/A',
-      role: user.role || 'user',
-      membership_tier: user.membership_tier || 'free',
-      created: user.created,
-    };
-
-    if (user.role === 'admin') {
-      adminUsers.push(userObj);
-    } else if (user.membership_tier === 'premium') {
-      premiumUsers.push(userObj);
-    } else {
-      freeUsers.push(userObj);
-    }
-  });
-
-  logger.info('[USERS-GET] ✓ Users grouped successfully');
-  logger.info(`[USERS-GET]   - Admin users: ${adminUsers.length}`);
-  logger.info(`[USERS-GET]   - Free tier users: ${freeUsers.length}`);
-  logger.info(`[USERS-GET]   - Premium tier users: ${premiumUsers.length}`);
-
-  // Step 5: Build response
-  logger.info('[USERS-GET] Step 5: Building response');
-
-  const response = {
-    adminUsers,
-    freeUsers,
-    premiumUsers,
-    counts: {
-      admin: adminUsers.length,
-      free: freeUsers.length,
-      premium: premiumUsers.length,
-      total: users.length,
-    },
+function toListShape(u) {
+  return {
+    id: u.id,
+    pocketbaseId: u.pocketbaseId,
+    email: u.email,
+    name: u.name,
+    full_name: u.name,
+    role: u.role,
+    verified: u.verified,
+    membership_tier: u.membershipTier,
+    created: u.createdAt,
   };
+}
 
-  logger.info('[USERS-GET] ========================================');
-  logger.info('[USERS-GET] ✓ GET USERS COMPLETED SUCCESSFULLY');
-  logger.info('[USERS-GET] ========================================');
-  logger.info(`[USERS-GET] Response counts:`);
-  logger.info(`[USERS-GET]   - Admin: ${response.counts.admin}`);
-  logger.info(`[USERS-GET]   - Free: ${response.counts.free}`);
-  logger.info(`[USERS-GET]   - Premium: ${response.counts.premium}`);
-  logger.info(`[USERS-GET]   - Total: ${response.counts.total}`);
+/**
+ * Resolve a Prisma user by the incoming :id.
+ * Accepts either a PG uuid (`User.id`) or a PocketBase id (`User.pocketbaseId`),
+ * because the transition frontend passes PB record ids, while PG uses uuids.
+ */
+async function resolveUserById(idValue) {
+  let user = await userRepo.findById(idValue);
+  if (user) return user;
+  user = await userRepo.findByPocketbaseId(idValue);
+  return user;
+}
 
-  res.json(response);
+/**
+ * GET /users
+ * Admin-only paginated list with search + role filter.
+ * Response matches AdminRoleManagement.jsx: { data, pagination: { totalPages } }.
+ */
+router.get('/', requireAdmin, async (req, res, next) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const search = (req.query.search || '').toString().trim();
+    const roleFilter = (req.query.roleFilter || '').toString().trim();
+
+    const where = { isDeleted: false };
+    if (roleFilter && roleFilter !== 'all') {
+      const role = normalizeRole(roleFilter);
+      if (role) where.role = role;
+    }
+    if (search) {
+      where.OR = [
+        { email: { contains: search, mode: 'insensitive' } },
+        { name: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [rows, total] = await Promise.all([
+      userRepo.prisma.user.findMany({
+        where,
+        select: LIST_FIELDS,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      userRepo.prisma.user.count({ where }),
+    ]);
+
+    res.json({
+      data: rows.map(toListShape),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * PUT /users/:id/role
+ * Admin-only role update with PG → PocketBase dual-write.
+ * Body: { role: 'user' | 'admin' }
+ */
+router.put('/:id/role', requireAdmin, async (req, res, next) => {
+  try {
+    const role = normalizeRole((req.body || {}).role);
+    if (!role) {
+      return res.status(400).json({ error: 'Invalid role. Must be "user" or "admin".' });
+    }
+
+    const target = await resolveUserById(req.params.id);
+    if (!target) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (target.role === role) {
+      return res.json({ data: { ...toListShape(target), role } });
+    }
+
+    const previousRole = target.role;
+
+    // 1. Commit PG first
+    let updated;
+    try {
+      updated = await userRepo.updateRole(target.id, role);
+    } catch (pgErr) {
+      logger.error(`[USERS-ROLE] PG role update failed for ${target.email}: ${pgErr.message}`);
+      return res.status(500).json({ error: 'Failed to update role in PostgreSQL' });
+    }
+
+    // 2. Mirror to PocketBase (frontend still reads users from PB)
+    const pbUserId = target.pocketbaseId || target.id;
+    try {
+      await pb.collection('users').update(pbUserId, { role });
+    } catch (pbErr) {
+      logger.error(`[USERS-ROLE] PB mirror failed for ${pbUserId}: ${pbErr.message}`);
+      // Revert PG to keep the two stores consistent
+      try {
+        await userRepo.updateRole(target.id, previousRole);
+      } catch (revertErr) {
+        logger.error(`[USERS-ROLE] PG revert failed for ${target.email}: ${revertErr.message}`);
+      }
+      return res.status(500).json({ error: 'Failed to mirror role to PocketBase; PG change reverted' });
+    }
+
+    res.json({ data: { ...toListShape(updated), role } });
+  } catch (err) {
+    next(err);
+  }
 });
 
 export default router;

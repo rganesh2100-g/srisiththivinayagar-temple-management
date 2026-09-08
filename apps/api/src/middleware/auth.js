@@ -84,8 +84,8 @@ export const authMiddleware = async (req, res, next) => {
       payload = JSON.parse(payloadJson);
       logger.info('[AUTH-MIDDLEWARE] ✓ Token payload decoded successfully');
       logger.info(`[AUTH-MIDDLEWARE]   - User ID: ${payload.id || 'N/A'}`);
-      logger.info(`[AUTH-MIDDLEWARE]   - Token issued at: ${new Date(payload.iat * 1000).toISOString()}`);
-      logger.info(`[AUTH-MIDDLEWARE]   - Token expires at: ${new Date(payload.exp * 1000).toISOString()}`);
+      logger.info(`[AUTH-MIDDLEWARE]   - Token issued at: ${payload.iat ? new Date(payload.iat * 1000).toISOString() : 'N/A'}`);
+      logger.info(`[AUTH-MIDDLEWARE]   - Token expires at: ${payload.exp ? new Date(payload.exp * 1000).toISOString() : 'N/A'}`);
     } catch (decodeError) {
       logger.warn('[AUTH-MIDDLEWARE] ✗ Failed to decode token payload');
       logger.warn(`[AUTH-MIDDLEWARE]   - Error: ${decodeError.message}`);
