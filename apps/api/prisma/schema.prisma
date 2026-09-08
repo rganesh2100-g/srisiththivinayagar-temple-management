@@ -287,12 +287,13 @@ model PhotoCategory {
 // 5. festivals — Temple festivals
 // ─────────────────────────────────────────────────────────────────────────────
 model Festival {
-  id          String         @id @default(uuid()) @db.VarChar(36)
+  id          String         @id @db.VarChar(36)
   name        String         @db.VarChar(255)
   description String?        @db.Text
   date        DateTime?      @db.Date
   status      FestivalStatus?
   image       String?        @db.VarChar(500)
+  isDeleted   Boolean        @default(false)
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
 
@@ -359,11 +360,24 @@ model ContactInquiry {
 // ─────────────────────────────────────────────────────────────────────────────
 // 9. poojas — Temple services/events catalog
 // ─────────────────────────────────────────────────────────────────────────────
+// CATEGORY MAPPING (PocketBase free-text → Prisma PoojaCategory):
+//   Daily    → daily
+//   Special  → special
+//   Regular  → daily
+//   Festival → festival
+// STATUS MAPPING (PocketBase select → Prisma):
+//   draft      → status = draft    , published = false
+//   published  → status = active   , published = true
+//   archived   → status = archived , published = false
 model Pooja {
-  id               String        @id @default(uuid()) @db.VarChar(36)
+  id               String        @id @db.VarChar(36)
   name             String        @db.VarChar(255)
   description      String?       @db.Text
   category         PoojaCategory @default(daily)
+  god              String        @db.VarChar(255)
+  deity            String?       @db.VarChar(255)
+  duration         Int
+  maxParticipants  Int?
   donationAmount   Decimal       @db.Decimal(10, 2)
   price            Decimal?      @db.Decimal(10, 2)
   availabilityType String?       @db.VarChar(50)
@@ -372,7 +386,9 @@ model Pooja {
   specificDates    Json?
   specificDays     Json?
   timeSlots        Json?
-  status           PoojaStatus   @default(active)
+  availableDates   String?       @db.Text
+  status           PoojaStatus   @default(draft)
+  published        Boolean       @default(false)
   isArchived       Boolean       @default(false)
   archivedAt       DateTime?
   isDeleted        Boolean       @default(false)
@@ -386,6 +402,7 @@ model Pooja {
 
   @@index([category])
   @@index([status])
+  @@index([published])
   @@index([isArchived])
   @@index([isDeleted])
   @@index([festivalId])
@@ -397,31 +414,40 @@ model Pooja {
 // 10. pooja_bookings — User bookings for temple services (23 columns)
 // ─────────────────────────────────────────────────────────────────────────────
 // CHECK: donationAmount >= 1
+// BOOKING STATUS MAPPING (PocketBase → Prisma BookingStatus):
+//   PB status        pending/approved/rejected/completed/cancelled → same
+//   legacy PB booking_status: Confirmed → confirmed,
+//   Pending Approval → pending, Cancelled → cancelled
 model PoojaBooking {
-  id               String            @id @default(uuid()) @db.VarChar(36)
-  userId           String            @db.VarChar(36)
-  poojaId          String            @db.VarChar(36)
-  name             String            @db.VarChar(255)
-  email            String            @db.VarChar(320)
-  userContact      String?           @db.VarChar(15)
-  phone            String?           @db.VarChar(15)
-  bookingDate      DateTime?
-  poojaDate        DateTime?
-  timeSlot         String?           @db.VarChar(50)
-  selectedDate     String?           @db.VarChar(50)
-  selectedTimeSlot String?           @db.VarChar(50)
-  donationAmount   Decimal           @db.Decimal(10, 2)
-  bookingStatus    BookingStatus     @default(pending)
-  paymentStatus    PaymentStatus?
-  status           String?           @db.VarChar(50)
-  receiptNumber    String?           @unique @db.VarChar(50)
-  transactionId    String?           @db.VarChar(100)
-  notes            String?           @db.Text
-  poojaName        String?           @db.VarChar(255)
-  bookingTime      DateTime?
-  isDeleted        Boolean           @default(false)
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  id                 String            @id @db.VarChar(36)
+  userId             String            @db.VarChar(36)
+  poojaId            String            @db.VarChar(36)
+  name               String            @db.VarChar(255)
+  email              String            @db.VarChar(320)
+  userContact        String?           @db.VarChar(15)
+  phone              String?           @db.VarChar(15)
+  bookingDate        DateTime?
+  poojaDate          DateTime?
+  timeSlot           String?           @db.VarChar(50)
+  selectedDate       String?           @db.VarChar(50)
+  selectedTimeSlot   String?           @db.VarChar(50)
+  donationAmount     Decimal           @db.Decimal(10, 2)
+  feeAmount          Decimal?          @db.Decimal(10, 2)
+  bookingStatus      BookingStatus     @default(pending)
+  paymentStatus      PaymentStatus?
+  receiptNumber      String?           @unique @db.VarChar(50)
+  receiptId          String?           @db.VarChar(100)
+  receiptPdf         String?           @db.VarChar(500)
+  receiptGeneratedAt DateTime?
+  receiptSentAt      DateTime?
+  resendReceipt      Boolean           @default(false)
+  transactionId      String?           @db.VarChar(100)
+  notes              String?           @db.Text
+  poojaName          String?           @db.VarChar(255)
+  bookingTime        String?           @db.VarChar(50)
+  isDeleted          Boolean           @default(false)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
   // Relations
   user             User              @relation(fields: [userId], references: [id], onDelete: Restrict)
@@ -430,6 +456,7 @@ model PoojaBooking {
 
   @@index([userId])
   @@index([poojaId])
+  @@index([poojaId, poojaDate, timeSlot])
   @@index([bookingStatus])
   @@index([isDeleted])
   @@index([userId, bookingStatus])
@@ -441,14 +468,17 @@ model PoojaBooking {
 // 11. booking_messages — Chat per booking
 // ─────────────────────────────────────────────────────────────────────────────
 model BookingMessage {
-  id            String                  @id @default(uuid()) @db.VarChar(36)
-  bookingId     String                  @db.VarChar(36)
-  senderType    BookingMessageSenderType
-  senderEmail   String                  @db.VarChar(320)
-  messageContent String                 @db.Text
-  readStatus    Boolean                 @default(false)
-  createdAt     DateTime                @default(now())
-  updatedAt     DateTime                @updatedAt
+  id             String                  @id @db.VarChar(36)
+  bookingId      String                  @db.VarChar(36)
+  senderType     BookingMessageSenderType
+  senderId       String?                 @db.VarChar(36)
+  senderEmail    String?                 @db.VarChar(320)
+  messageContent String                  @db.Text
+  readStatus     Boolean                 @default(false)
+  bookingDate    DateTime?
+  timeSlot       String?                 @db.VarChar(100)
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
 
   // Relations
   booking PoojaBooking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
@@ -612,7 +642,7 @@ model Payment {
 // 16. approval_logs — Subscription approval audit trail
 // ─────────────────────────────────────────────────────────────────────────────
 model ApprovalLog {
-  id        String              @id @default(uuid()) @db.VarChar(36)
+  id        String              @id @db.VarChar(36)
   adminId   String              @db.VarChar(36)
   adminName String              @db.VarChar(255)
   action    ApprovalLogAction
