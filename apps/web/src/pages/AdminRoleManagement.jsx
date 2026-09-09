@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Helmet } from 'react-helmet';
 import AdminLayout from '@/components/AdminLayout.jsx';
-import apiServerClient from '@/lib/apiServerClient.js';
+import apiServerClient from '@/utils/apiServerClient.js';
 import pb from '@/lib/pocketbaseClient.js';
 import { toast } from 'sonner';
 

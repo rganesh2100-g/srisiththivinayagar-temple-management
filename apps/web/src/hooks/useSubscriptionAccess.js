@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import pb from '@/lib/pocketbaseClient.js';
+import apiServerClient from '@/utils/apiServerClient.js';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 
 export const useSubscriptionAccess = (providedUserId) => {
@@ -57,10 +58,15 @@ export const useSubscriptionAccess = (providedUserId) => {
         setLoading(true);
         setError(null);
 
-        // Fetch fresh user data from PocketBase to get the latest account_type
-        const userRecord = await pb.collection('users').getOne(safeUserId, { $autoCancel: false });
-        
-        if (isMounted) {
+        // Fetch fresh user data (H3 /auth/me — lazy PG mirror happens server-side)
+        const response = await apiServerClient.get('/auth/me');
+        if (!response.ok) {
+          throw new Error('Failed to load user profile');
+        }
+        const body = await response.json();
+        const userRecord = body.user || null;
+
+        if (isMounted && userRecord) {
           setIsPremium(userRecord.account_type === 'Premium Membership');
         }
 

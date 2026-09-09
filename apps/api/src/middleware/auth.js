@@ -138,6 +138,10 @@ export const authMiddleware = async (req, res, next) => {
       verified: user.verified || false,
     };
 
+    // H4: expose the full PB record for the lazy PG user mirror.
+    // The H3 routes create the PostgreSQL user from this record on first access.
+    req.pbUser = user;
+
     logger.info('[AUTH-MIDDLEWARE] ✓ req.user populated successfully');
     logger.info('[AUTH-MIDDLEWARE] User details:');
     logger.info(`[AUTH-MIDDLEWARE]   - ID: ${req.user.id}`);

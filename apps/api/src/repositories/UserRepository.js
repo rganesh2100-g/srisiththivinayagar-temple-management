@@ -15,13 +15,46 @@
 // pocketbaseId join is unavailable.
 // ═══════════════════════════════════════════════════════════════════════════════
 
+import bcrypt from 'bcryptjs';
 import BaseRepository from './BaseRepository.js';
+import {
+  normalizeAccountType,
+  normalizeLanguage,
+  normalizeRole,
+} from '../constants/enumMappings.js';
 
 // Prisma `UserRole` values
 const USER_ROLE = {
   USER: 'user',
   ADMIN: 'admin',
 };
+
+// Map legacy PocketBase select values → canonical Prisma enum values.
+const TIER_ALIASES = { premium: 'premium', free: 'free' };
+const SUB_STATUS_ALIASES = { premium: 'premium', free: 'free', admin: 'admin' };
+const PREMIUM_STATUS_ALIASES = {
+  active: 'Active',
+  inactive: 'Inactive',
+  pending: 'Pending',
+  '': 'Inactive',
+  undefined: 'Inactive',
+  null: 'Inactive',
+};
+
+function mapTier(value) {
+  const v = String(value ?? '').trim().toLowerCase();
+  return TIER_ALIASES[v] || 'free';
+}
+
+function mapSubscriptionStatus(value) {
+  const v = String(value ?? '').trim().toLowerCase();
+  return SUB_STATUS_ALIASES[v] || 'free';
+}
+
+function mapPremiumStatus(value) {
+  const v = String(value ?? '').trim().toLowerCase();
+  return PREMIUM_STATUS_ALIASES[v] || 'Inactive';
+}
 
 class UserRepository extends BaseRepository {
   constructor(client) {
@@ -91,6 +124,125 @@ class UserRepository extends BaseRepository {
    */
   findByPocketbaseId(pocketbaseId) {
     return this.prisma.user.findUnique({ where: { pocketbaseId } });
+  }
+
+  /**
+   * Resolve the Prisma user for an authenticated PB identity, lazily creating
+   * the PostgreSQL row the first time that PB user reaches an H3 users/auth
+   * endpoint (LAZY USER MIRROR — no bulk/historical data migration).
+   *
+   * Lookup order: pocketbaseId → email (same as findByAuthIdentity).
+   * Creation is idempotent: the `pocketbaseId` unique constraint (with a
+   * re-fetch on race) prevents duplicates.
+   *
+   * @param {{id?: string, email?: string}} auth - PB-derived identity
+   * @param {object|null} [pbRecord] - full PB users-collection record (req.pbUser)
+   * @returns {Promise<object|null>}
+   */
+  async getOrCreateByAuthIdentity(auth, pbRecord = null) {
+    if (!auth || !auth.id) return null;
+
+    const existing = await this.findByAuthIdentity(auth);
+    if (existing) return existing;
+
+    // Creation requires the authenticated PB identity AND its PB record.
+    if (!pbRecord || !pbRecord.id || pbRecord.id !== auth.id) return null;
+
+    return this.mirrorUserFromPocketBase(pbRecord);
+  }
+
+  /**
+   * Create (or resolve) a Prisma user from a PocketBase users record.
+   * Mirrors only information that is actually available on the PB record;
+   * everything else falls back to H3/current-application canonical defaults.
+   * Does NOT invent historical subscription/account data.
+   *
+   * @param {object} pbRecord - PocketBase users-collection record
+   * @returns {Promise<object|null>}
+   */
+  async mirrorUserFromPocketBase(pbRecord) {
+    if (!pbRecord || !pbRecord.email) return null;
+
+    const byPb = await this.findByPocketbaseId(pbRecord.id);
+    if (byPb) return byPb;
+
+    // Avoid email-unique collisions: adopt an existing PG row by email only
+    // when it has no pocketbaseId yet (keeps pocketbaseId the primary bridge).
+    const byEmail = await this.findByEmail(pbRecord.email);
+    if (byEmail) {
+      if (!byEmail.pocketbaseId) {
+        return this.prisma.user.update({
+          where: { id: byEmail.id },
+          data: { pocketbaseId: pbRecord.id },
+        });
+      }
+      return byEmail;
+    }
+
+    const name =
+      pbRecord.name && String(pbRecord.name).trim().length >= 2
+        ? String(pbRecord.name).trim()
+        : null;
+    const phone =
+      pbRecord.phone && String(pbRecord.phone).trim().length > 0 && String(pbRecord.phone).trim().length <= 15
+        ? String(pbRecord.phone).trim()
+        : null;
+    const accountType = normalizeAccountType(pbRecord.account_type);
+    const preferredLanguage = normalizeLanguage(pbRecord.preferred_language) || 'Tamil';
+    const fontSizePreference = pbRecord.fontSizePreference
+      ? String(pbRecord.fontSizePreference)
+      : 'normal';
+    const approvalStatus = pbRecord.approval_status
+      ? String(pbRecord.approval_status).trim()
+      : null;
+    const membershipTier = mapTier(pbRecord.membership_type ?? pbRecord.membershipTier);
+    const subscriptionStatus = mapSubscriptionStatus(pbRecord.subscription_status);
+    const premiumStatus = mapPremiumStatus(pbRecord.premium_status);
+    const subscriptionExpiryDate = pbRecord.subscription_expiry_date
+      ? new Date(pbRecord.subscription_expiry_date)
+      : null;
+
+    // PB remains the identity authority: this password is never used to log in.
+    const password = await bcrypt.hash(`pb-mirror-${pbRecord.id}`, 12);
+
+    const data = {
+      pocketbaseId: pbRecord.id,
+      email: pbRecord.email,
+      name,
+      avatar: pbRecord.avatar || null,
+      verified: Boolean(pbRecord.verified),
+      emailVisibility: false,
+      password,
+      role: normalizeRole(pbRecord.role) || 'user',
+      membershipTier,
+      membershipType: membershipTier,
+      subscriptionStatus,
+      premiumStatus,
+      approvalStatus,
+      accountType,
+      phone,
+      preferredLanguage,
+      fontSizePreference,
+      subscriptionExpiryDate,
+      isBlocked: Boolean(pbRecord.is_blocked),
+      isDeleted: Boolean(pbRecord.is_deleted),
+    };
+
+    try {
+      return await this.prisma.user.create({ data });
+    } catch (err) {
+      // Unique-race guard (concurrent first access): re-resolve instead of failing.
+      if (err && err.code === 'P2002') {
+        const existing = await this.findByAuthIdentity({
+          id: pbRecord.id,
+          email: pbRecord.email,
+        });
+        if (existing) return existing;
+        const byEmailAgain = await this.findByEmail(pbRecord.email);
+        if (byEmailAgain) return byEmailAgain;
+      }
+      throw err;
+    }
   }
 
   /**

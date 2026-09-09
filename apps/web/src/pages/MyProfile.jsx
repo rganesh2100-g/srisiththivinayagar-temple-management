@@ -3,6 +3,7 @@ import { Helmet } from 'react-helmet';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import pb from '@/lib/pocketbaseClient.js';
+import apiServerClient from '@/utils/apiServerClient.js';
 import { updateRecord } from '@/lib/pbHelper.js';
 import { useAuth } from '@/contexts/AuthContext.jsx';
 import DashboardLayout from '@/components/DashboardLayout.jsx';
@@ -45,7 +46,15 @@ const MyProfile = () => {
         setLoading(true);
         setError(null);
         
-        const user = await pb.collection('users').getOne(currentUser.id, { $autoCancel: false });
+        // Initial profile data via H3 (lazy PG mirror happens server-side).
+        // Realtime (subscribe) and avatar upload continue to use PocketBase.
+        const response = await apiServerClient.get('/auth/me');
+        if (!response.ok) {
+          throw new Error('Failed to load profile data');
+        }
+        const body = await response.json();
+        const user = body.user;
+
         setProfileData(user);
         setFormData({
           name: user.name || '',
@@ -99,8 +108,29 @@ const MyProfile = () => {
   const handleSave = async () => {
     setSaving(true);
     try {
+      // PocketBase stays the identity/UI authoring source (preserves realtime).
       const updatedUser = await updateRecord('users', currentUser.id, formData);
-      setProfileData(updatedUser);
+
+      // Mirror the profile write into PostgreSQL via H3 (best-effort).
+      let pgUser = updatedUser;
+      try {
+        const res = await apiServerClient.patch('/auth/me', {
+          name: formData.name,
+          phone: formData.phone,
+          address: formData.address,
+          preferredLanguage: formData.preferred_language,
+        });
+        if (res.ok) {
+          const mirrorBody = await res.json();
+          if (mirrorBody?.user) pgUser = mirrorBody.user;
+        } else {
+          console.error('Profile mirror to API failed:', await res.text());
+        }
+      } catch (mirrorErr) {
+        console.error('Profile mirror to API failed:', mirrorErr);
+      }
+
+      setProfileData(pgUser);
       await refreshUser();
       setIsEditing(false);
       toast.success(t('common.success', 'Profile updated successfully'));
@@ -186,8 +216,12 @@ const MyProfile = () => {
   const isAdmin = profileData?.role === 'admin' || profileData?.account_type === 'Admin' || profileData?.account_type === 'admin';
   const isPremium = profileData?.membershipTier === 'premium' || profileData?.membership_type === 'premium';
   
-  const avatarUrl = profileData?.avatar 
-    ? pb.files.getUrl(profileData, profileData.avatar) 
+  // Avatar is PocketBase-owned: use the live PB record (currentUser) to build
+// the media URL so it works whether profileData came from H3 or PB realtime.
+  const avatarFile = currentUser?.avatar || profileData?.avatar;
+  const avatarRecord = { ...currentUser, ...profileData };
+  const avatarUrl = avatarFile && avatarRecord
+    ? pb.files.getUrl(avatarRecord, avatarFile)
     : `https://ui-avatars.com/api/?name=${encodeURIComponent(profileData?.name || profileData?.email)}&background=8B0000&color=fff`;
 
   return (

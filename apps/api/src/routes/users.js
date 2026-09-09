@@ -57,12 +57,35 @@ function toListShape(u) {
  * Resolve a Prisma user by the incoming :id.
  * Accepts either a PG uuid (`User.id`) or a PocketBase id (`User.pocketbaseId`),
  * because the transition frontend passes PB record ids, while PG uses uuids.
+ * If no PG row exists yet, lazily mirror the PB record (H4 lazy mirror) so the
+ * role-page can still operate on PB users that have not hit an H3 endpoint.
  */
 async function resolveUserById(idValue) {
   let user = await userRepo.findById(idValue);
   if (user) return user;
   user = await userRepo.findByPocketbaseId(idValue);
-  return user;
+  if (user) return user;
+
+  try {
+    const pbRecord = await pb.collection('users').getOne(idValue);
+    return await userRepo.mirrorUserFromPocketBase(pbRecord);
+  } catch (pbErr) {
+    logger.warn(`[USERS-RESOLVE] PB lookup failed for ${idValue}: ${pbErr.message}`);
+    return null;
+  }
+}
+
+/**
+ * Resolve the authenticated admin into PostgreSQL (lazy mirror).
+ * Logs a warning on failure but does not block listing (PB auth already passed).
+ */
+async function resolveRequester(req) {
+  try {
+    return await userRepo.getOrCreateByAuthIdentity(req.user, req.pbUser || null);
+  } catch (err) {
+    logger.warn(`[USERS-REQ] Failed to mirror authenticated admin ${req.user?.id}: ${err.message}`);
+    return null;
+  }
 }
 
 /**
@@ -72,6 +95,7 @@ async function resolveUserById(idValue) {
  */
 router.get('/', requireAdmin, async (req, res, next) => {
   try {
+    await resolveRequester(req);
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 10));
     const search = (req.query.search || '').toString().trim();
@@ -124,6 +148,11 @@ router.put('/:id/role', requireAdmin, async (req, res, next) => {
     const role = normalizeRole((req.body || {}).role);
     if (!role) {
       return res.status(400).json({ error: 'Invalid role. Must be "user" or "admin".' });
+    }
+
+    const requester = await resolveRequester(req);
+    if (!requester) {
+      return res.status(500).json({ error: 'Failed to resolve authenticated admin in PostgreSQL' });
     }
 
     const target = await resolveUserById(req.params.id);

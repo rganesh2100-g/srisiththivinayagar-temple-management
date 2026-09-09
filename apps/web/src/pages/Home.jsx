@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Helmet } from 'react-helmet';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext.jsx';
+import apiServerClient from '@/utils/apiServerClient.js';
 import pb from '@/lib/pocketbaseClient.js';
 
 import SideMenu from '@/components/SideMenu.jsx';
@@ -26,8 +27,13 @@ const Home = () => {
     const fetchData = async () => {
       try {
         if (currentUser?.id) {
-          const data = await pb.collection('users').getOne(currentUser.id, { $autoCancel: false });
-          setUserData(data);
+          const response = await apiServerClient.get('/auth/me');
+          if (response.ok) {
+            const body = await response.json();
+            if (body?.user) {
+              setUserData(body.user);
+            }
+          }
         }
 
         const poojas = await pb.collection('poojas').getList(1, 3, {
