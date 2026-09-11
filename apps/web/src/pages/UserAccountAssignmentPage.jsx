@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Helmet } from 'react-helmet';
 import AdminLayout from '@/components/AdminLayout.jsx';
 import pb from '@/lib/pocketbaseClient.js';
+import apiServerClient from '@/utils/apiServerClient.js';
 import { toast } from 'sonner';
 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table.jsx';
@@ -56,12 +57,22 @@ const UserAccountAssignmentPage = () => {
   const handleAssignAccountType = async (userId, newType) => {
     setUpdatingId(userId);
     try {
-      const updatedUser = await pb.collection('users').update(userId, {
-        account_type: newType
-      }, { $autoCancel: false });
-      
-      setUsers(prev => prev.map(u => u.id === userId ? updatedUser : u));
-      toast.success(`Account assigned as ${newType} successfully`);
+      const response = await apiServerClient.fetch(`/users/${userId}/account-type`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountType: newType })
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.data) {
+        const updated = data.data;
+        setUsers(prev => prev.map(u => u.id === userId ? { ...u, account_type: updated.account_type } : u));
+        toast.success(`Account assigned as ${newType} successfully`);
+      } else {
+        const apiError = data.error || 'Failed to assign account type';
+        toast.error(apiError);
+      }
     } catch (err) {
       console.error('Update failed:', err);
       toast.error('Failed to assign account type');

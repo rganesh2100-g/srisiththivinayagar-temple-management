@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Helmet } from 'react-helmet';
 import AdminLayout from '@/components/AdminLayout.jsx';
 import apiServerClient from '@/utils/apiServerClient.js';
-import pb from '@/lib/pocketbaseClient.js';
 import { toast } from 'sonner';
 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -119,17 +118,26 @@ const AdminRoleManagement = () => {
     
     setActionLoading(userToDelete.id);
     try {
-      // Using PocketBase directly for deletion as per typical architecture
-      await pb.collection('users').delete(userToDelete.id, { $autoCancel: false });
-      
-      toast.success('User deleted successfully');
-      setDeleteDialogOpen(false);
-      
-      // If we deleted the last user on the page, go to previous page
-      if (users.length === 1 && page > 1) {
-        setPage(page - 1);
+      const response = await apiServerClient.fetch(`/users/${userToDelete.id}`, {
+        method: 'DELETE'
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.data && data.data.deleted) {
+        toast.success('User deleted successfully');
+        setDeleteDialogOpen(false);
+        
+        // If we deleted the last user on the page, go to previous page
+        if (users.length === 1 && page > 1) {
+          setPage(page - 1);
+        } else {
+          fetchUsers();
+        }
       } else {
-        fetchUsers();
+        const apiError = data.error || 'Failed to delete user';
+        toast.error(apiError);
+        console.error('API Error deleting user:', data);
       }
     } catch (err) {
       console.error('Full error details deleting user:', err);

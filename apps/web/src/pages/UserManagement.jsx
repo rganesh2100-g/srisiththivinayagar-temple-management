@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Helmet } from 'react-helmet';
 import AdminLayout from '@/components/AdminLayout.jsx';
 import pb from '@/lib/pocketbaseClient.js';
+import apiServerClient from '@/utils/apiServerClient.js';
 import { toast } from 'sonner';
 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table.jsx';
@@ -67,18 +68,27 @@ const UserManagement = () => {
   const handleAccountTypeChange = async (userId, newValue) => {
     setActionLoading(userId);
     try {
-      const data = await pb.collection('users').update(userId, { 
-        account_type: newValue 
-      }, { $autoCancel: false });
-      
-      toast.success(`Account type updated to ${newValue}.`);
-      
-      setUsers(prevUsers => 
-        prevUsers.map(u => u.id === userId 
-          ? { ...u, account_type: data.account_type, account_type_status: data.account_type_status } 
-          : u
-        )
-      );
+      const response = await apiServerClient.fetch(`/users/${userId}/account-type`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountType: newValue })
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.data) {
+        toast.success(`Account type updated to ${newValue}.`);
+
+        setUsers(prevUsers => 
+          prevUsers.map(u => u.id === userId 
+            ? { ...u, account_type: data.data.account_type, account_type_status: data.data.account_type_status } 
+            : u
+          )
+        );
+      } else {
+        const apiError = data.error || 'Failed to update user account type.';
+        throw new Error(apiError);
+      }
     } catch (error) {
       console.error('Error updating account type:', error);
       toast.error(error.message || 'Failed to update user account type.');

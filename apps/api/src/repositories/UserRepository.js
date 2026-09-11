@@ -339,6 +339,32 @@ class UserRepository extends BaseRepository {
   }
 
   /**
+   * Update a user's explicit account type (admin operation).
+   * Updates ONLY the PostgreSQL accountType column with the canonical value.
+   * @param {string} id
+   * @param {string} accountType - canonical value (e.g. 'Free Membership', 'Premium Membership', 'Admin')
+   * @returns {Promise<object>}
+   */
+  updateAccountType(id, accountType) {
+    return this.prisma.user.update({
+      where: { id },
+      data: { accountType },
+    });
+  }
+
+  /**
+   * Hard-delete a user from PostgreSQL.
+   * Throws a Prisma P2003 error when a restrictive foreign key prevents it —
+   * the route layer performs the approved soft-delete fallback in that case.
+   * No cascade deletion is performed here (related business data is untouched).
+   * @param {string} id
+   * @returns {Promise<object>}
+   */
+  deleteUserHard(id) {
+    return this.prisma.user.delete({ where: { id } });
+  }
+
+  /**
    * Soft-delete a user (archive for the transition period).
    * @param {string} id
    * @returns {Promise<object>}

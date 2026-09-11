@@ -2,6 +2,9 @@ import 'dotenv/config';
 import express from 'express';
 import pb from '../utils/pocketbaseClient.js';
 import logger from '../utils/logger.js';
+import UserRepository from '../repositories/UserRepository.js';
+
+const userRepo = new UserRepository();
 
 const router = express.Router();
 
@@ -186,7 +189,44 @@ router.put('/:paymentId/approve', requireAdmin, async (req, res) => {
     logger.info(`[ADMIN-PAYMENTS-APPROVE] Created new subscription ${finalSubscription.id}`);
   }
 
-  // (e) Return success response
+  // (e) H5: mirror the approved premium state into PostgreSQL.
+  // Best-effort & idempotent by design: if this fails, the PB approval still
+  // succeeded and its response is returned unchanged — we only log the issue.
+  // The mirror is additive (no data migration): the PG row is created lazily if
+  // it did not exist yet, then the premium fields are applied.
+  try {
+    const pbUser = await pb.collection('users').getOne(userId);
+    if (pbUser) {
+      const mirrorUser = await userRepo.getOrCreateByAuthIdentity(
+        { id: userId, email: pbUser.email || undefined },
+        pbUser,
+      );
+      if (mirrorUser) {
+        await userRepo.prisma.user.update({
+          where: { id: mirrorUser.id },
+          data: {
+            accountType: 'Premium Membership',
+            membershipType: 'premium',
+            subscriptionStatus: 'premium',
+            premiumStatus: 'Active',
+            approvalStatus: 'approved',
+            subscriptionExpiryDate: finalSubscription?.end_date
+              ? new Date(finalSubscription.end_date)
+              : null,
+          },
+        });
+        logger.info(`[ADMIN-PAYMENTS-APPROVE] PG premium mirror updated for ${userId}`);
+      } else {
+        logger.warn(`[ADMIN-PAYMENTS-APPROVE] PG mirror skipped: no row created for ${userId}`);
+      }
+    }
+  } catch (pgMirrorErr) {
+    logger.error(
+      `[ADMIN-PAYMENTS-APPROVE] PG premium mirror failed for ${userId}: ${pgMirrorErr.message}`,
+    );
+  }
+
+  // (f) Return success response
   res.json({
     success: true,
     message: 'Payment approved, user upgraded to premium membership',
