@@ -104,6 +104,7 @@ enum PaymentApprovalStatus {
   pending
   approved
   rejected
+  completed
 }
 
 enum ApprovalLogAction {
@@ -477,20 +478,25 @@ model BookingMessage {
 // 12. donations — User donations (18 columns)
 // ─────────────────────────────────────────────────────────────────────────────
 // CHECK: amount > 0
+// H8: id no longer uses uuid() default — mirrors PB record id for idempotent upsert.
 model Donation {
-  id                      String                 @id @default(uuid()) @db.VarChar(36)
+  id                      String                 @id @db.VarChar(36)
   userId                  String                 @db.VarChar(36)
   amount                  Decimal                @db.Decimal(10, 2)
   donationDate            DateTime?
   donationDescription     String?                @db.Text
+  notes                   String?                @db.Text
   specialOccasion         String?                @db.VarChar(255)
   category                String?                @db.VarChar(100)
   status                  PaymentApprovalStatus? @default(pending)
   approvalDate            DateTime?
   paymentStatus           PaymentStatus?
+  receiptId               String?                @db.VarChar(100)
   receiptNumber           String?                @unique @db.VarChar(50)
   receiptPdf              String?                @db.VarChar(500)
   receiptGeneratedAt      DateTime?
+  receiptSentAt           DateTime?
+  resendReceipt           Boolean                @default(false)
   contactNumber           String?                @db.VarChar(15)
   email                   String?                @db.VarChar(320)
   communicationPreference String?                @db.VarChar(50)
