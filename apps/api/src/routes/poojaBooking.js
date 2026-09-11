@@ -80,7 +80,7 @@ router.get('/:id/receipt', async (req, res) => {
   const { id } = req.params;
   try {
     const booking = await pb.collection('pooja_bookings').getOne(id);
-    const storedReceiptId = booking.receipt_id;
+    const storedReceiptId = booking.receipt_id || booking.receipt_number;
 
     if (!storedReceiptId) {
       return res.status(404).json({ error: 'Receipt not found for this booking' });

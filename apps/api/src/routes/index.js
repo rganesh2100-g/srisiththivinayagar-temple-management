@@ -6,6 +6,7 @@ import poojaBookingRouter from './poojaBooking.js';
 import pendingSubscriptionsRouter from './pendingSubscriptions.js';
 import authRouter from './auth.js';
 import usersRouter from './users.js';
+import bookingMirrorRouter from './bookingMirror.js';
 
 export default () => {
   const router = Router();
@@ -16,5 +17,6 @@ export default () => {
   router.use('/pending-subscriptions', pendingSubscriptionsRouter);
   router.use('/auth', authRouter);
   router.use('/users', usersRouter);
+  router.use('/internal/booking-mirror', bookingMirrorRouter);
   return router;
 };

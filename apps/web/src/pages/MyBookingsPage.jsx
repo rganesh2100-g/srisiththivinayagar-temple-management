@@ -69,9 +69,7 @@ const MyBookingsPage = () => {
   const handleDownloadReceipt = async (bookingId, receiptNumber) => {
     try {
       setDownloadingId(bookingId);
-      const response = await apiServerClient.fetch(`/receipts/poojas/${bookingId}/generate-receipt`, {
-        method: 'POST'
-      });
+      const response = await apiServerClient.fetch(`/pooja-bookings/${bookingId}/receipt`);
       
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));

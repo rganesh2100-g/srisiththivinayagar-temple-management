@@ -86,7 +86,7 @@ const UserMessagesPage = () => {
       const newMsg = await pb.collection('booking_messages').create({
         booking_id: bookingId,
         sender_type: 'user',
-        sender_id: currentUser.id,
+        sender_email: currentUser.email,
         message_content: content,
         read_status: false
       }, { $autoCancel: false });
