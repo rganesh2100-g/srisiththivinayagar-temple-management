@@ -1,3 +1,4 @@
+/* global process, console, setTimeout, fetch */
 // ═══════════════════════════════════════════════════════════════════════════════
 // H8 E2E verification matrix (STEP 14) — A..O.
 // Real app path where PB allows it; direct mirror endpoint where PB is broken
