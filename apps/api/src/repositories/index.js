@@ -14,3 +14,7 @@ export { default as PendingSubscriptionRepository } from './PendingSubscriptionR
 export { default as PoojaRepository } from './PoojaRepository.js';
 export { default as PaymentRepository } from './PaymentRepository.js';
 export { default as TempleAccountRepository } from './TempleAccountRepository.js';
+export { default as ExpenseRepository } from './ExpenseRepository.js';
+export { default as ExpenseCategoryRepository } from './ExpenseCategoryRepository.js';
+export { default as ClassificationRepository } from './ClassificationRepository.js';
+export { default as VoucherRepository } from './VoucherRepository.js';

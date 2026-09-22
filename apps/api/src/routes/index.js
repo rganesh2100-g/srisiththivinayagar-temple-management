@@ -9,6 +9,7 @@ import usersRouter from './users.js';
 import bookingMirrorRouter from './bookingMirror.js';
 import donationMirrorRouter from './donationMirror.js';
 import paymentMirrorRouter from './paymentMirror.js';
+import expenseMirrorRouter from './expenseMirror.js';
 
 export default () => {
   const router = Router();
@@ -22,5 +23,6 @@ export default () => {
   router.use('/internal/booking-mirror', bookingMirrorRouter);
   router.use('/internal/donation-mirror', donationMirrorRouter);
   router.use('/internal/payment-mirror', paymentMirrorRouter);
+  router.use('/internal/expense-mirror', expenseMirrorRouter);
   return router;
 };
