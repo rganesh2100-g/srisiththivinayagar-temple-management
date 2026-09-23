@@ -57,6 +57,12 @@ Rules:
 - ALWAYS pair `--max-time <s>` with `-s -o NUL` (or `-w "%{http_code}"`) so output is one line and the command terminates.
 - After a successful health check, add an explicit `exit` (or `exit 0`) so execution moves to the next step without waiting.
 
+HARD EXIT RULE (apply to EVERY bash command, not just health checks):
+- Every command MUST end with an explicit exit point — `; exit 0` (or `exit 1` on failure) — so the tool never hangs waiting on a child process or spawned server.
+- After launching a background server with `Start-Process`, the launching command MUST NOT keep running: print the PID/short status, then end with `; exit 0` immediately. Do NOT rely on a later command to unblock it. If a launch knows a fixed port, follow it with a `curl.exe ... --max-time 5 ...; exit 0` health probe in the SAME command.
+- Never leave a bare `Write-Output "..."` as the last statement — always terminate with `exit 0`.
+- If a command seems about to spawn something that stays alive (servers, PB, redirect redirection via `Start-Process -RedirectStandardOutput`), tests in the temp dir first verify the child actually detached (e.g. PID returned AND health 200) before the command ends.
+
 ## Lint
 
 ```bash
