@@ -30,7 +30,12 @@
 //   - temple_accounts mirror mirrors rows AS THEY EXIST in PB. Expense-originated
 //     rows (transaction_id "EXP-<expenseId>") map to "ta_EXP-<expenseId>", which
 //     cannot collide with donation (ta_<donationId>) / payment (ta_<paymentId>) /
-//     booking (ta_<bookingId>) ids. No legacy donation "STEP-4" logic is removed.
+//     booking (ta_<bookingId>) ids.
+//   - Delete propagation (H9 remediation): PB record deletions are mirrored 1:1.
+//     Deletes are idempotent (deleteMany — missing PG rows are a no-op). The
+//     local app already deletes the paired Expense-originated temple_accounts
+//     row (transaction_id "EXP-<expenseId>") itself, so NO extra cascade is
+//     invented here — per-record propagation keeps PG = PB exactly.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 import prisma, { withTransaction } from '../lib/prisma.js';
@@ -410,10 +415,129 @@ export async function mirrorTempleAccount(record) {
   }
 }
 
+/**
+ * Delete a PB expense_categories mirror row.
+ * Idempotent: deleteMany on a missing id is a no-op (never throws).
+ * @param {object} body - { id }
+ * @returns {Promise<{ok: boolean, deleted?: number, error?: string}>}
+ */
+export async function deleteExpenseCategory(body) {
+  if (!body || typeof body !== 'object' || !body.id) {
+    return { ok: false, error: 'Invalid delete payload: id is required' };
+  }
+  const id = String(body.id);
+  try {
+    await prisma.expenseCategory.deleteMany({ where: { id } });
+    logger.info(`[EXPENSE-MIRROR] deleted expense_categories ${id} -> PG`);
+    return { ok: true, deleted: 1 };
+  } catch (err) {
+    logger.error(`[EXPENSE-MIRROR] delete failed for expense_categories ${id}: ${err.message}`, { cause: err });
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Delete a PB classifications mirror row. Idempotent.
+ * @param {object} body - { id }
+ * @returns {Promise<{ok: boolean, deleted?: number, error?: string}>}
+ */
+export async function deleteClassification(body) {
+  if (!body || typeof body !== 'object' || !body.id) {
+    return { ok: false, error: 'Invalid delete payload: id is required' };
+  }
+  const id = String(body.id);
+  try {
+    await prisma.classification.deleteMany({ where: { id } });
+    logger.info(`[EXPENSE-MIRROR] deleted classifications ${id} -> PG`);
+    return { ok: true, deleted: 1 };
+  } catch (err) {
+    logger.error(`[EXPENSE-MIRROR] delete failed for classifications ${id}: ${err.message}`, { cause: err });
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Delete a PB expenses mirror row. Idempotent. Any voucher rows that
+ * reference the expense degrade via the schema SetNull FK (PG side), exactly
+ * matching the mirror's existing SetNull semantics for unresolvable expenses.
+ * @param {object} body - { id }
+ * @returns {Promise<{ok: boolean, deleted?: number, error?: string}>}
+ */
+export async function deleteExpense(body) {
+  if (!body || typeof body !== 'object' || !body.id) {
+    return { ok: false, error: 'Invalid delete payload: id is required' };
+  }
+  const id = String(body.id);
+  try {
+    await prisma.expense.deleteMany({ where: { id } });
+    logger.info(`[EXPENSE-MIRROR] deleted expenses ${id} -> PG`);
+    return { ok: true, deleted: 1 };
+  } catch (err) {
+    logger.error(`[EXPENSE-MIRROR] delete failed for expenses ${id}: ${err.message}`, { cause: err });
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Delete a PB vouchers mirror row. Idempotent.
+ * @param {object} body - { id }
+ * @returns {Promise<{ok: boolean, deleted?: number, error?: string}>}
+ */
+export async function deleteVoucher(body) {
+  if (!body || typeof body !== 'object' || !body.id) {
+    return { ok: false, error: 'Invalid delete payload: id is required' };
+  }
+  const id = String(body.id);
+  try {
+    await prisma.voucher.deleteMany({ where: { id } });
+    logger.info(`[EXPENSE-MIRROR] deleted vouchers ${id} -> PG`);
+    return { ok: true, deleted: 1 };
+  } catch (err) {
+    logger.error(`[EXPENSE-MIRROR] delete failed for vouchers ${id}: ${err.message}`, { cause: err });
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
+ * Delete a PB temple_accounts mirror row. Idempotent.
+ * Differs from the create path: in the PB afterDelete hook the transaction_id
+ * is still readable from the record, so the same deterministic PG id derivation
+ * applies. When transaction_id is absent the mirror falls back to ta_pb_<pbId>,
+ * matching the create-side derivation — we delete by BOTH candidates to stay
+ * idempotent regardless of which scheme the row used.
+ * @param {object} body - { id, transaction_id }
+ * @returns {Promise<{ok: boolean, deleted?: number, error?: string}>}
+ */
+export async function deleteTempleAccount(body) {
+  if (!body || typeof body !== 'object' || !body.id) {
+    return { ok: false, error: 'Invalid delete payload: id is required' };
+  }
+  const pbId = String(body.id);
+  const transactionId = refToId(body.transaction_id);
+  const candidates = [];
+  if (transactionId) candidates.push(`ta_${transactionId}`);
+  candidates.push(`ta_pb_${pbId}`);
+  try {
+    const result = await prisma.templeAccount.deleteMany({
+      where: { OR: [{ id: { in: candidates } }, { transactionId: pbId }] },
+    });
+    logger.info(`[EXPENSE-MIRROR] deleted temple_accounts ${pbId} -> PG (count=${result.count}, candidates=${candidates.join(',')})`);
+    return { ok: true, deleted: result.count };
+  } catch (err) {
+    logger.error(`[EXPENSE-MIRROR] delete failed for temple_accounts ${pbId}: ${err.message}`, { cause: err });
+    return { ok: false, error: err.message };
+  }
+}
+
 export default {
   mirrorExpenseCategory,
   mirrorClassification,
   mirrorExpense,
   mirrorVoucher,
   mirrorTempleAccount,
+  deleteExpenseCategory,
+  deleteClassification,
+  deleteExpense,
+  deleteVoucher,
+  deleteTempleAccount,
 };

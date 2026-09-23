@@ -4,12 +4,13 @@
 // Purpose:
 //   PocketBase remains the active application-facing donation/realtime system.
 //   This service idempotently mirrors PB donations records into PostgreSQL
-//   (Donation + derived TempleAccount) so Prisma becomes the PG access layer.
+//   (Donation) so Prisma becomes the PG access layer. Donation-income
+//   TempleAccount rows are created by the PB donation-temple-accounts hook and
+//   mirrored by the H9 expense-ledger mirror — NEVER derived in this service.
 //
 // Design invariants:
-//   - Idempotent by PB donation id: PG Donation.id == PB donation id, and
-//     PG TempleAccount.id == "ta_<pb donation id>". Repeated mirror calls can
-//     never create duplicate rows (upsert on the fixed PK).
+//   - Idempotent by PB donation id: PG Donation.id == PB donation id. Repeated
+//     mirror calls can never create duplicate rows (upsert on the fixed PK).
 //   - No historical data migration: only records pushed by the PB hooks land
 //     in PG. PostgreSQL is intentionally fresh for operational data.
 //   - User mapping follows the H5/H7 identity strategy: pocketbaseId → email.
@@ -17,8 +18,9 @@
 //   - Status/field values are mapped 1:1 to the existing Prisma enums; unknown
 //     values are reported, never silently collapsed. `completed` maps to the
 //     H8-extended `completed` enum value (never folded into `approved`).
-//   - The derived TempleAccount income row is created/updated ONLY when the
-//     donation is `approved` and amount > 0 (financial income event).
+//   - Donation-income TempleAccount ownership is UNIQUELY the PB donation-
+//     temple-accounts hook + the H9 expense-ledger mirror. This service NEVER
+//     derives `ta_<donationId>` rows (H9 remediation removed H8 STEP-4).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 import prisma, { withTransaction } from '../lib/prisma.js';
@@ -183,55 +185,28 @@ export async function mirrorDonation(donation) {
       createdAt: toDate(donation.created || donation.created_at) || new Date(),
     };
 
-    // --- Derived TempleAccount (STEP 4) when the donation becomes income ---
-    // Mirrors the legacy PB donation-temple-accounts hook semantics:
-    //   category   = donation category (fallback 'General')
-    //   transaction_id = donation id
-    //   date/month/year from the donation date
-    // Created ONLY for approved donations (rejected/pending never create income).
-    // Determinstic id 'ta_<donationId>' keeps the mirror idempotent.
-    let templeAccountData = null;
-    if (donationStatus === 'approved') {
-      const accountDate = donationDate || toDate(donation.approval_date) || new Date();
-      if (amount > 0) {
-        templeAccountData = {
-          id: `ta_${donationId}`,
-          memberName: (pgUser.name && String(pgUser.name).trim().length >= 2)
-            ? String(pgUser.name).trim()
-            : 'Donor',
-          amount,
-          category: textSlice(donation.category, 100) || 'General',
-          date: accountDate,
-          month: accountDate.toLocaleDateString('en-US', { month: 'long' }),
-          year: accountDate.getFullYear(),
-          classification: 'Donation',
-          transactionId: donationId,
-          description: donationData.donationDescription || undefined,
-        };
-      }
-    }
+    // --- Donation-income TempleAccount write REMOVED (H9 remediation) ---
+    // The old H8 STEP-4 block derived a PG `ta_<donationId>` row directly from
+    // this mirror, independent of PocketBase. That produced PG ledger rows with
+    // no corresponding PB temple_accounts record (split-brain ledger). Correct
+    // ownership: the PB donation-temple-accounts hook creates the real
+    // temple_accounts record on approval, and the H9 expense-ledger mirror
+    // mirrors it into PG via id `ta_<transactionId>`. This service mirrors ONLY
+    // the Donation row now.
 
-    // --- Single PG transaction: donation + temple account stay consistent ---
+    // --- Single PG transaction: donation row stays consistent ---
     await withTransaction(async (tx) => {
       await tx.donation.upsert({
         where: { id: donationId },
         create: { ...donationData, createdAt: donationData.createdAt },
         update: donationData,
       });
-
-      if (templeAccountData) {
-        await tx.templeAccount.upsert({
-          where: { id: templeAccountData.id },
-          create: templeAccountData,
-          update: templeAccountData,
-        });
-      }
     });
 
     logger.info(
-      `[DONATION-MIRROR] mirrored donation ${donationId} -> PG (user=${pgUser.id}, status=${donationStatus}, templeAccount=${Boolean(templeAccountData)})`
+      `[DONATION-MIRROR] mirrored donation ${donationId} -> PG (user=${pgUser.id}, status=${donationStatus}, templeAccount=none)`
     );
-    return { ok: true, donationId, templeAccount: Boolean(templeAccountData) };
+    return { ok: true, donationId, templeAccount: false };
   } catch (err) {
     logger.error(`[DONATION-MIRROR] mirror failed for ${donationId}: ${err.message}`, { cause: err });
     return { ok: false, error: err.message };

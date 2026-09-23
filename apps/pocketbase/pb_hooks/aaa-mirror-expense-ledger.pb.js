@@ -10,6 +10,12 @@
 //   - vouchers          -> POST /internal/expense-mirror/voucher
 //   - temple_accounts   -> POST /internal/expense-mirror/temple-account
 //
+// H9 remediation: the same five collections ALSO mirror deletions via
+// DELETE /internal/expense-mirror/{resource} so PG always equals PB. Delete
+// propagation is idempotent on the API side (deleteMany — a missing PG row is
+// a 200 no-op), never creates cascades PB did not perform, and never weakens
+// PB collection rules.
+//
 // Registration is under the aaa- prefix (loaded first) so the mirror fires
 // before the legacy receipt/ledger hooks that can abort later after-update
 // chains in PB 0.38's JSVM (see aaa-mirror-donation.pb.js for the full
@@ -763,6 +769,290 @@ onRecordAfterUpdateSuccess((e) => {
     }
   } catch (err) {
     console.log("[mirror-expense-ledger] temple_accounts update handler error: " + (err && err.message ? err.message : String(err)));
+  }
+
+  e.next();
+}, "temple_accounts");
+
+// ---- delete propagation (H9 remediation) -------------------------------------
+// PB afterDelete hooks mirror the deletion into PG via the same internal API
+// (same secret + retry + never-throw guarantees). Deletes are idempotent.
+// expense_categories
+onRecordAfterDeleteSuccess((e) => {
+  try {
+    var record = e.record;
+    var MIRROR_PATH = "/internal/expense-mirror/expense-category";
+    var API_BASE = $os.getenv("BOOKING_MIRROR_API_URL") || "http://localhost:3001";
+    var MIRROR_SECRET = $os.getenv("BOOKING_MIRROR_SECRET");
+
+    if (!MIRROR_SECRET) {
+      console.log("[mirror-expense-ledger] BOOKING_MIRROR_SECRET not set; skipping expense_categories delete mirror for " + record.id);
+    } else {
+      var cId = record.id || "";
+      var payload = { id: cId, transaction_id: null };
+      var lastError = null;
+      var attempts = 0;
+      var maxAttempts = 2;
+
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          var response = $http.send({
+            url: API_BASE + MIRROR_PATH,
+            method: "DELETE",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Booking-Mirror-Secret": MIRROR_SECRET,
+            },
+            body: JSON.stringify(payload),
+            timeout: 4,
+          });
+
+          if (response && response.statusCode >= 200 && response.statusCode < 300) {
+            console.log("[mirror-expense-ledger] deleted expense_categories " + cId + " -> API " + response.statusCode);
+            lastError = null;
+            break;
+          }
+
+          lastError = "http " + (response ? response.statusCode : "no-response");
+          console.log("[mirror-expense-ledger] delete attempt " + attempts + " failed for expense_categories " + cId + ": " + lastError);
+        } catch (err) {
+          lastError = err && err.message ? err.message : String(err);
+          console.log("[mirror-expense-ledger] delete attempt " + attempts + " errored for expense_categories " + cId + ": " + lastError);
+        }
+      }
+
+      if (lastError) {
+        console.log("[mirror-expense-ledger] expense_categories delete mirror FAILED for " + cId + " after " + maxAttempts + " attempts: " + lastError);
+      }
+    }
+  } catch (err) {
+    console.log("[mirror-expense-ledger] expense_categories delete handler error: " + (err && err.message ? err.message : String(err)));
+  }
+
+  e.next();
+}, "expense_categories");
+
+// classifications
+onRecordAfterDeleteSuccess((e) => {
+  try {
+    var record = e.record;
+    var MIRROR_PATH = "/internal/expense-mirror/classification";
+    var API_BASE = $os.getenv("BOOKING_MIRROR_API_URL") || "http://localhost:3001";
+    var MIRROR_SECRET = $os.getenv("BOOKING_MIRROR_SECRET");
+
+    if (!MIRROR_SECRET) {
+      console.log("[mirror-expense-ledger] BOOKING_MIRROR_SECRET not set; skipping classifications delete mirror for " + record.id);
+    } else {
+      var cId = record.id || "";
+      var payload = { id: cId, transaction_id: null };
+      var lastError = null;
+      var attempts = 0;
+      var maxAttempts = 2;
+
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          var response = $http.send({
+            url: API_BASE + MIRROR_PATH,
+            method: "DELETE",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Booking-Mirror-Secret": MIRROR_SECRET,
+            },
+            body: JSON.stringify(payload),
+            timeout: 4,
+          });
+
+          if (response && response.statusCode >= 200 && response.statusCode < 300) {
+            console.log("[mirror-expense-ledger] deleted classifications " + cId + " -> API " + response.statusCode);
+            lastError = null;
+            break;
+          }
+
+          lastError = "http " + (response ? response.statusCode : "no-response");
+          console.log("[mirror-expense-ledger] delete attempt " + attempts + " failed for classifications " + cId + ": " + lastError);
+        } catch (err) {
+          lastError = err && err.message ? err.message : String(err);
+          console.log("[mirror-expense-ledger] delete attempt " + attempts + " errored for classifications " + cId + ": " + lastError);
+        }
+      }
+
+      if (lastError) {
+        console.log("[mirror-expense-ledger] classifications delete mirror FAILED for " + cId + " after " + maxAttempts + " attempts: " + lastError);
+      }
+    }
+  } catch (err) {
+    console.log("[mirror-expense-ledger] classifications delete handler error: " + (err && err.message ? err.message : String(err)));
+  }
+
+  e.next();
+}, "classifications");
+
+// expenses
+onRecordAfterDeleteSuccess((e) => {
+  try {
+    var record = e.record;
+    var MIRROR_PATH = "/internal/expense-mirror/expense";
+    var API_BASE = $os.getenv("BOOKING_MIRROR_API_URL") || "http://localhost:3001";
+    var MIRROR_SECRET = $os.getenv("BOOKING_MIRROR_SECRET");
+
+    if (!MIRROR_SECRET) {
+      console.log("[mirror-expense-ledger] BOOKING_MIRROR_SECRET not set; skipping expenses delete mirror for " + record.id);
+    } else {
+      var eId = record.id || "";
+      var payload = { id: eId, transaction_id: null };
+      var lastError = null;
+      var attempts = 0;
+      var maxAttempts = 2;
+
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          var response = $http.send({
+            url: API_BASE + MIRROR_PATH,
+            method: "DELETE",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Booking-Mirror-Secret": MIRROR_SECRET,
+            },
+            body: JSON.stringify(payload),
+            timeout: 4,
+          });
+
+          if (response && response.statusCode >= 200 && response.statusCode < 300) {
+            console.log("[mirror-expense-ledger] deleted expenses " + eId + " -> API " + response.statusCode);
+            lastError = null;
+            break;
+          }
+
+          lastError = "http " + (response ? response.statusCode : "no-response");
+          console.log("[mirror-expense-ledger] delete attempt " + attempts + " failed for expenses " + eId + ": " + lastError);
+        } catch (err) {
+          lastError = err && err.message ? err.message : String(err);
+          console.log("[mirror-expense-ledger] delete attempt " + attempts + " errored for expenses " + eId + ": " + lastError);
+        }
+      }
+
+      if (lastError) {
+        console.log("[mirror-expense-ledger] expenses delete mirror FAILED for " + eId + " after " + maxAttempts + " attempts: " + lastError);
+      }
+    }
+  } catch (err) {
+    console.log("[mirror-expense-ledger] expenses delete handler error: " + (err && err.message ? err.message : String(err)));
+  }
+
+  e.next();
+}, "expenses");
+
+// vouchers
+onRecordAfterDeleteSuccess((e) => {
+  try {
+    var record = e.record;
+    var MIRROR_PATH = "/internal/expense-mirror/voucher";
+    var API_BASE = $os.getenv("BOOKING_MIRROR_API_URL") || "http://localhost:3001";
+    var MIRROR_SECRET = $os.getenv("BOOKING_MIRROR_SECRET");
+
+    if (!MIRROR_SECRET) {
+      console.log("[mirror-expense-ledger] BOOKING_MIRROR_SECRET not set; skipping vouchers delete mirror for " + record.id);
+    } else {
+      var vId = record.id || "";
+      var payload = { id: vId, transaction_id: null };
+      var lastError = null;
+      var attempts = 0;
+      var maxAttempts = 2;
+
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          var response = $http.send({
+            url: API_BASE + MIRROR_PATH,
+            method: "DELETE",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Booking-Mirror-Secret": MIRROR_SECRET,
+            },
+            body: JSON.stringify(payload),
+            timeout: 4,
+          });
+
+          if (response && response.statusCode >= 200 && response.statusCode < 300) {
+            console.log("[mirror-expense-ledger] deleted vouchers " + vId + " -> API " + response.statusCode);
+            lastError = null;
+            break;
+          }
+
+          lastError = "http " + (response ? response.statusCode : "no-response");
+          console.log("[mirror-expense-ledger] delete attempt " + attempts + " failed for vouchers " + vId + ": " + lastError);
+        } catch (err) {
+          lastError = err && err.message ? err.message : String(err);
+          console.log("[mirror-expense-ledger] delete attempt " + attempts + " errored for vouchers " + vId + ": " + lastError);
+        }
+      }
+
+      if (lastError) {
+        console.log("[mirror-expense-ledger] vouchers delete mirror FAILED for " + vId + " after " + maxAttempts + " attempts: " + lastError);
+      }
+    }
+  } catch (err) {
+    console.log("[mirror-expense-ledger] vouchers delete handler error: " + (err && err.message ? err.message : String(err)));
+  }
+
+  e.next();
+}, "vouchers");
+
+// temple_accounts (transaction_id forwarded so the API derives ta_<txn> and
+// also defends the ta_pb_<id> fallback + transactionId-match delete)
+onRecordAfterDeleteSuccess((e) => {
+  try {
+    var record = e.record;
+    var MIRROR_PATH = "/internal/expense-mirror/temple-account";
+    var API_BASE = $os.getenv("BOOKING_MIRROR_API_URL") || "http://localhost:3001";
+    var MIRROR_SECRET = $os.getenv("BOOKING_MIRROR_SECRET");
+
+    if (!MIRROR_SECRET) {
+      console.log("[mirror-expense-ledger] BOOKING_MIRROR_SECRET not set; skipping temple_accounts delete mirror for " + record.id);
+    } else {
+      var tId = record.id || "";
+      var payload = { id: tId, transaction_id: record.get("transaction_id") || null };
+      var lastError = null;
+      var attempts = 0;
+      var maxAttempts = 2;
+
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          var response = $http.send({
+            url: API_BASE + MIRROR_PATH,
+            method: "DELETE",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Booking-Mirror-Secret": MIRROR_SECRET,
+            },
+            body: JSON.stringify(payload),
+            timeout: 4,
+          });
+
+          if (response && response.statusCode >= 200 && response.statusCode < 300) {
+            console.log("[mirror-expense-ledger] deleted temple_accounts " + tId + " -> API " + response.statusCode);
+            lastError = null;
+            break;
+          }
+
+          lastError = "http " + (response ? response.statusCode : "no-response");
+          console.log("[mirror-expense-ledger] delete attempt " + attempts + " failed for temple_accounts " + tId + ": " + lastError);
+        } catch (err) {
+          lastError = err && err.message ? err.message : String(err);
+          console.log("[mirror-expense-ledger] delete attempt " + attempts + " errored for temple_accounts " + tId + ": " + lastError);
+        }
+      }
+
+      if (lastError) {
+        console.log("[mirror-expense-ledger] temple_accounts delete mirror FAILED for " + tId + " after " + maxAttempts + " attempts: " + lastError);
+      }
+    }
+  } catch (err) {
+    console.log("[mirror-expense-ledger] temple_accounts delete handler error: " + (err && err.message ? err.message : String(err)));
   }
 
   e.next();

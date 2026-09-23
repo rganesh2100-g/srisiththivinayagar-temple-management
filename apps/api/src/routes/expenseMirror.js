@@ -9,6 +9,10 @@
 //   Body:    PocketBase record representation for the matching collection
 //   Auth:    X-Booking-Mirror-Secret header === process.env.BOOKING_MIRROR_SECRET
 //
+// DELETE /internal/expense-mirror/{resource}   (same 5 resources, delete
+// propagation — H9 remediation). Body: { id } (temple-account also accepts
+// transaction_id). Idempotent: deleting an absent PG row is a 200 no-op.
+//
 // INTERNAL ENDPOINTS — never exposed to the frontend. PocketBase hooks (which
 // cannot import Prisma) push expense-ledger records into PostgreSQL via
 // Express. Uses the existing H7 mirror-secret mechanism (reused env + header).
@@ -24,6 +28,11 @@ import {
   mirrorExpense,
   mirrorVoucher,
   mirrorTempleAccount,
+  deleteExpenseCategory,
+  deleteClassification,
+  deleteExpense,
+  deleteVoucher,
+  deleteTempleAccount,
 } from '../services/expenseMirror.js';
 
 const router = Router();
@@ -73,5 +82,11 @@ router.post('/classification', requireMirrorSecret, (req, res) => runMirror(req,
 router.post('/expense', requireMirrorSecret, (req, res) => runMirror(req, res, mirrorExpense));
 router.post('/voucher', requireMirrorSecret, (req, res) => runMirror(req, res, mirrorVoucher));
 router.post('/temple-account', requireMirrorSecret, (req, res) => runMirror(req, res, mirrorTempleAccount));
+
+router.delete('/expense-category', requireMirrorSecret, (req, res) => runMirror(req, res, deleteExpenseCategory));
+router.delete('/classification', requireMirrorSecret, (req, res) => runMirror(req, res, deleteClassification));
+router.delete('/expense', requireMirrorSecret, (req, res) => runMirror(req, res, deleteExpense));
+router.delete('/voucher', requireMirrorSecret, (req, res) => runMirror(req, res, deleteVoucher));
+router.delete('/temple-account', requireMirrorSecret, (req, res) => runMirror(req, res, deleteTempleAccount));
 
 export default router;

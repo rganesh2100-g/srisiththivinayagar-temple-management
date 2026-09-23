@@ -409,7 +409,7 @@ async function main() {
     return { ok: okFull, detail: `api=${r.status} billFile=${row && row.billFile} class=${row && row.classification} voucherId=${row && row.voucherId} desc=${row && row.description}` };
   });
   await assert("V. TempleAccount split amounts + subscriptionType mapping", async () => {
-    const ta = await pbAdmin.collection("temple_accounts").create({
+    await pbAdmin.collection("temple_accounts").create({
       member_name: `${TEST_TAG} Splits`, amount: 100, category: `${TEST_TAG} Split Cat`,
       date: "2026-09-10 00:00:00.000Z", transaction_id: `${TEST_TAG}_T3`, classification: "General",
       month: "September", year: 2026,
@@ -425,7 +425,7 @@ async function main() {
   });
 
   // ================= W. NO-H8-REGRESSION PROOF =================
-  await assert("W. No ta_<donationId> collision: donation STEP-4 scheme untouched", async () => {
+  await assert("W. ta_EXP-<expenseId> scheme intact (donation TA now via PB hook + H9 mirror)", async () => {
     const donated = await prisma.templeAccount.findUnique({ where: { id: `ta_EXP-${expenseA.id}` } });
     const donationScheme = await waitFor(async () => {
       const r = await prisma.user.findUnique({ where: { pocketbaseId: testUser.id } });
@@ -433,18 +433,134 @@ async function main() {
     });
     return {
       ok: !!donated && Number(donated.amount) === -150.5,
-      detail: `ta_EXP-<id> present=${!!donated} (donation STEP-4 lives at ta_<donationId>, untouched; user mirror transport ok=${donationScheme})`,
+      detail: `ta_EXP-<id> present=${!!donated} (donation-income IDs stay ta_<donationId> via the corrected PB hook + H9 mirror; user mirror transport ok=${donationScheme})`,
     };
   });
 
-  // ================= X. REAL-APP EXISTENCE (no hard failure) =================
-  await assert("X. Real expense delete flow (PB) — PG row kept (no delete-mirror, doc)", async () => {
+  // ================= X. DELETE PROPAGATION (H9 remediation) =================
+  await assert("X. Real PB delete flow -> PG row removed + idempotent", async () => {
     await pbAdmin.collection("temple_accounts").delete(taB.id).catch(() => {});
-    const pgRow = await prisma.templeAccount.findUnique({ where: { id: `ta_${TEST_TAG}_T2` } });
+    const ok = await waitFor(async () => {
+      return !(await prisma.templeAccount.findUnique({ where: { id: `ta_${TEST_TAG}_T2` } }));
+    });
+    if (ok) {
+      // repeated delete must stay idempotent / safe
+      const r = await apiJson("/internal/expense-mirror/temple-account", {
+        method: "DELETE", headers: mirrorHeader(SECRET), body: JSON.stringify({ id: taB.id, transaction_id: `${TEST_TAG}_T2` }),
+      });
+      return { ok: r.status === 200, detail: `PB deleted ${TEST_TAG}_T2; PG row removed; repeat delete -> API ${r.status}` };
+    }
+    return { ok: false, detail: `PB deleted ${TEST_TAG}_T2; PG row STILL present (delete propagation missing)` };
+  });
+
+  // ================= X2. DELETE PROPAGATION — remaining 4 collections =================
+  await assert("X2. Delete: expense_category -> PG removed + idempotent", async () => {
+    const c = await pbAdmin.collection("expense_categories").create({ name: `${TEST_TAG} DelCat`, description: "del" });
+    if (!(await waitFor(async () => !!(await prisma.expenseCategory.findUnique({ where: { id: c.id } }))))) {
+      return { ok: false, detail: "PG category absent before delete" };
+    }
+    await pbAdmin.collection("expense_categories").delete(c.id).catch(() => {});
+    const ok = await waitFor(async () => !(await prisma.expenseCategory.findUnique({ where: { id: c.id } })));
+    if (!ok) return { ok: false, detail: "PG category STILL present after PB delete" };
+    const r = await apiJson("/internal/expense-mirror/expense-category", {
+      method: "DELETE", headers: mirrorHeader(SECRET), body: JSON.stringify({ id: c.id }),
+    });
+    return { ok: r.status === 200, detail: `PG removed; repeat delete -> API ${r.status}` };
+  });
+
+  await assert("X3. Delete: classification -> PG removed + idempotent", async () => {
+    const c = await pbAdmin.collection("classifications").create({ name: `${TEST_TAG} DelClass`, description: "del" });
+    if (!(await waitFor(async () => !!(await prisma.classification.findUnique({ where: { id: c.id } }))))) {
+      return { ok: false, detail: "PG classification absent before delete" };
+    }
+    await pbAdmin.collection("classifications").delete(c.id).catch(() => {});
+    const ok = await waitFor(async () => !(await prisma.classification.findUnique({ where: { id: c.id } })));
+    if (!ok) return { ok: false, detail: "PG classification STILL present after PB delete" };
+    const r = await apiJson("/internal/expense-mirror/classification", {
+      method: "DELETE", headers: mirrorHeader(SECRET), body: JSON.stringify({ id: c.id }),
+    });
+    return { ok: r.status === 200, detail: `PG removed; repeat delete -> API ${r.status}` };
+  });
+
+  await assert("X4. Delete: expense + its EXP- TA -> both PG removed (real app flow)", async () => {
+    const c = await pbAdmin.collection("expense_categories").create({ name: `${TEST_TAG} DelExpCat`, description: "del" });
+    const e = await pbAdmin.collection("expenses").create({
+      category_id: c.id, amount: 55, date: "2026-09-04 00:00:00.000Z",
+      paid_to: `${TEST_TAG} DelExp`, created_by: testAdmin.id, classification: classA.name,
+      category: "General",
+    });
+    const ta = await pbAdmin.collection("temple_accounts").create({
+      member_name: `${TEST_TAG} DelExpTa`, amount: -55, category: "General",
+      date: "2026-09-04 00:00:00.000Z", transaction_id: `EXP-${e.id}`, classification: classA.name,
+      month: "September", year: 2026,
+    });
+    const okPre = await waitFor(async () => {
+      const exp = await prisma.expense.findUnique({ where: { id: e.id } });
+      const t = await prisma.templeAccount.findUnique({ where: { id: `ta_EXP-${e.id}` } });
+      return !!exp && !!t;
+    });
+    if (!okPre) return { ok: false, detail: "PG expense/TA absent before delete" };
+    // Real app flow: ExpenseManagerPage deletes the paired TA row itself, then the expense.
+    await pbAdmin.collection("temple_accounts").delete(ta.id).catch(() => {});
+    const taGone = await waitFor(async () => !(await prisma.templeAccount.findUnique({ where: { id: `ta_EXP-${e.id}` } })));
+    await pbAdmin.collection("expenses").delete(e.id).catch(() => {});
+    const expGone = await waitFor(async () => !(await prisma.expense.findUnique({ where: { id: e.id } })));
+    if (!taGone || !expGone) {
+      return { ok: false, detail: `PG expense removed=${expGone} PG ta_EXP removed=${taGone}` };
+    }
+    // Repeat mirror deletes must stay idempotent
+    const r = await apiJson("/internal/expense-mirror/expense", {
+      method: "DELETE", headers: mirrorHeader(SECRET), body: JSON.stringify({ id: e.id }),
+    });
     return {
-      ok: !!pgRow, // no delete-mirror exists in H7/H8/H9 — PG keeps the row (documented)
-      detail: `PB deleted ${TEST_TAG}_T2; PG still holds row=${!!pgRow} (delete mirror intentionally NOT implemented in H7/H8/H9)`,
+      ok: r.status === 200,
+      detail: `PG expense + ta_EXP-<id> both removed (per-record delete propagation, no cascade invented); repeat expense delete -> API ${r.status}`,
     };
+  });
+
+  await assert("X5. No invented cascade: expense delete alone leaves an orphan PB TA in PG", async () => {
+    const e = await pbAdmin.collection("expenses").create({
+      category_id: expCatA.id, amount: 33, date: "2026-09-07 00:00:00.000Z",
+      paid_to: `${TEST_TAG} NoCascade`, created_by: testAdmin.id, classification: classA.name,
+      category: "General",
+    });
+    await pbAdmin.collection("temple_accounts").create({
+      member_name: `${TEST_TAG} NoCascadeTa`, amount: -33, category: "General",
+      date: "2026-09-07 00:00:00.000Z", transaction_id: `EXP-${e.id}`, classification: classA.name,
+      month: "September", year: 2026,
+    });
+    if (!(await waitFor(async () => {
+      const exp = await prisma.expense.findUnique({ where: { id: e.id } });
+      const t = await prisma.templeAccount.findUnique({ where: { id: `ta_EXP-${e.id}` } });
+      return !!exp && !!t;
+    }))) {
+      return { ok: false, detail: "PG expense/TA absent before delete" };
+    }
+    // Delete ONLY the expense — the paired TA record still exists in PB, so PG must KEEP it.
+    await pbAdmin.collection("expenses").delete(e.id).catch(() => {});
+    const expGone = await waitFor(async () => !(await prisma.expense.findUnique({ where: { id: e.id } })));
+    const taStill = await prisma.templeAccount.findUnique({ where: { id: `ta_EXP-${e.id}` } });
+    return {
+      ok: expGone && !!taStill,
+      detail: `PG expense removed=${expGone}; orphan ta_EXP-<id> kept=${!!taStill} (mirror reflects PB: no cascade invented)`,
+    };
+  });
+
+  await assert("X6. Delete: voucher -> PG removed + idempotent", async () => {
+    const v = await pbAdmin.collection("vouchers").create({
+      voucher_id: `${TEST_TAG}_V_DEL`, expense_id: expenseA.id, amount: 12.5, category: "General",
+      paid_to: `${TEST_TAG} DelVoucher`, date: "2026-09-06 00:00:00.000Z", status: "pending",
+    });
+    if (!(await waitFor(async () => !!(await prisma.voucher.findUnique({ where: { id: v.id } }))))) {
+      return { ok: false, detail: "PG voucher absent before delete" };
+    }
+    await pbAdmin.collection("vouchers").delete(v.id).catch(() => {});
+    const ok = await waitFor(async () => !(await prisma.voucher.findUnique({ where: { id: v.id } })));
+    if (!ok) return { ok: false, detail: "PG voucher STILL present after PB delete" };
+    const r = await apiJson("/internal/expense-mirror/voucher", {
+      method: "DELETE", headers: mirrorHeader(SECRET), body: JSON.stringify({ id: v.id }),
+    });
+    return { ok: r.status === 200, detail: `PG removed; repeat delete -> API ${r.status}` };
   });
 
   // ================= Y. H9 boundary respected =================
