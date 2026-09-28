@@ -63,6 +63,35 @@ HARD EXIT RULE (apply to EVERY bash command, not just health checks):
 - Never leave a bare `Write-Output "..."` as the last statement — always terminate with `exit 0`.
 - If a command seems about to spawn something that stays alive (servers, PB, redirect redirection via `Start-Process -RedirectStandardOutput`), tests in the temp dir first verify the child actually detached (e.g. PID returned AND health 200) before the command ends.
 
+### Detaching a background server (the shell must NEVER stay open)
+
+Symptom: a command prints its result (e.g. `PB_HEALTH=200`) but the tool call never returns, so the session appears stuck on that step even though the work succeeded.
+
+Cause: `Start-Process` WITHOUT `-WindowStyle Hidden` keeps the child attached to the console, and `-RedirectStandardOutput` / `-RedirectStandardError` keep the parent's stdout/stderr pipes open. The shell then waits on those handles for the lifetime of the long-running child.
+
+Mandatory pattern for every detached launch (PB, API, or any daemon):
+
+```powershell
+$p = Start-Process -FilePath "<exe>" -ArgumentList "<args>" -WorkingDirectory "<dir>" `
+       -PassThru -WindowStyle Hidden `
+       -RedirectStandardOutput "$env:TEMP\<name>.log" `
+       -RedirectStandardError  "$env:TEMP\<name>.err"
+Write-Output "PID=$($p.Id)"
+Start-Sleep -Seconds <n>
+curl.exe -s -o NUL --max-time 5 -w "HEALTH=%{http_code}`n" "<url>"
+[System.Console]::Out.Flush()
+exit 0
+```
+
+Rules:
+- ALWAYS pass `-WindowStyle Hidden` to `Start-Process` so the child never attaches to the console.
+- ALWAYS redirect to a file under `$env:TEMP`; never leave stdout inherited.
+- ALWAYS end the launching command with `exit 0` on its own final line.
+- If output still appears to be withheld, add `[System.Console]::Out.Flush()` before `exit 0`.
+- Never combine a launch with a long-running foreground command in the same call — launch + health probe only, then stop.
+- To confirm a previously launched process is still healthy later, probe it in a SEPARATE command with `curl.exe --max-time`; do not re-launch from the same call.
+- A hung call that already printed its result is NOT a failure of the launched service: re-probe the health endpoint in a fresh command instead of relaunching (avoids duplicate processes fighting over the port).
+
 ## Lint
 
 ```bash

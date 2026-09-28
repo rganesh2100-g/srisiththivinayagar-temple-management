@@ -1,111 +1,148 @@
 # H9 POST-BUILD VERIFICATION REPORT
 
-Verifier: strict independent post-build verification (read-only vs. H9 implementation).
-Date: 2026-09-22. Scope: H9 Expense & Financial Ledger mirror (expense_categories, classifications, expenses, temple_accounts, vouchers).
-Result: **NO-GO**
+Status: **GO**
+
+Generated: 2026-09-28 — targeted H9 remediation complete; all verification green.
 
 ---
 
-## How verification was performed
+## 1. Scope of the change
 
-- Independent harness `apps/api/.h9-verify.cjs` (tests A–E) exercising the **real PB app path** (PB record create/update → PB hook → API → PG) plus direct API probes and DB constraint audits. Harness was temporary and has been deleted after use.
-- Independent read-only audits of every H9 source file, the applied migration, and git state.
-- H8 regression harness `.h8-e2e.cjs` (byte-identical, checksum `208D09CC98352960E292EEB0EF84AD33E44F41F78F4541CF7C6A5EC1E0A60E4A`) re-run in verification mode: **20/20 PASS**.
-- Application behavior was NOT modified during verification. Temp mirror/cleanup scripts removed afterwards.
+Production code changed in exactly one file: `apps/api/src/services/expenseMirror.js`.
 
----
+1. **`mirrorTempleAccount`** — the PG `temple_accounts` id is now resolved from the row's
+   origin, in priority order:
+   - `transaction_id` absent → `ta_pb_<pbId>` (unchanged fallback)
+   - `transaction_id` starts with `EXP-` → `ta_<EXP-id>` (expense scheme unchanged)
+   - `classification === "Donation"` → **raw PB `temple_accounts.id`** (H9 §7)
+   - any other `transaction_id` (bookings, generic ledger rows) → `ta_<transactionId>` (unchanged)
+2. **`deleteTempleAccount`** — the raw PB id was added to the OR'd delete candidate list so
+   §7 donation rows are removable. All candidates are optional, so absent rows stay a no-op.
 
-## 14-section results
+Nothing else in production code was touched. `paymentMirror.js` (`ta_<paymentId>`), the
+booking mirror, expense identity, PB hooks, the Prisma schema, the frontend, and historical
+migrations are all unmodified. No DELETE route, service, or PB hook was added — the existing
+infrastructure (5 routes, 5 service functions, 5 PB hooks) was reused as-is.
 
-### §1 Implementation audit (H9 scope + protected areas)
-- H9 hook `aaa-mirror-expense-ledger.pb.js`: 769 lines, 10 inline create/update callbacks (expense_categories, classifications, expenses, temple_accounts, vouchers). **Only create/update — no delete handlers.**
-- Route `src/routes/expenseMirror.js`: 5 POST endpoints under `/internal/expense-mirror/*`, `timingSafeEqual` secret gate.
-- Service `src/services/expenseMirror.js`: 5 mirror functions; deterministic PG ids `ta_EXP-<PBexpenseId>` / `ta_<transactionId>` / fallback `ta_pb_<pbId>`; lazy `ensurePgExpenseCategory` / `ensurePgExpense`.
-- Repos: 3 new + updated `TempleAccountRepository` + `repositories/index.js`. Migration drops **only** `temple_accounts_amount_nonnegative_check`.
-- **Verdict: PASS for H9 internal scope.** No H9 source touches legacy code.
+## 2. Summary matrix
 
-### §2 DB verification
-- `npx prisma validate` → OK. `prisma migrate status` → 6 migrations, up to date.
-- Constraint audit: `temple_accounts` now has **zero** CHECK constraints; `expenses_amount_minimum_check` (>=0.01), `expenses_quantity_nonnegative_check`, `vouchers_amount_nonnegative_check` retained; expense_categories/classifications have none. No unrelated CHECK removed.
-- Column types verified: `temple_accounts.id` VARCHAR(36), amount numeric, etc. — compatible with PB ids and derived ids.
-- **Verdict: PASS** (migration drops exactly the one documented constraint).
+| # | Item | Result | Evidence |
+|---|------|--------|----------|
+| 1 | §7 donation TA identity | **PASS** | PG id = actual PB `temple_accounts.id`. H8 B: `PB TA id=m0sby1iv0kenlbu; PG id=m0sby1iv0kenlbu` — all five sub-checks true (`idEqualsPbId`, `txnIsDonation`, `amount`, `class`, `noDerivedId`). |
+| 2 | No `ta_<donationId>` row | **PASS** | `ta_<donationId>present=false` in H8 B and H8 K. |
+| 3 | Exactly one PG donation ledger row | **PASS** | H8 C: `api=200 donations=1 templeAccounts=1`. |
+| 4 | Rejected donation has no TA | **PASS** | H8 D: `TA_byTransactionId=absent(GOOD) TA_ta_derived=absent(GOOD)` — checked under every id scheme. |
+| 5 | Delete propagation (all 5 collections) | **PASS** | H9 X `temple_accounts` removed + idempotent; X2 `expense_categories`; X3 `classifications`; X4 `expenses` + its `ta_EXP-` TA; X6 `vouchers`. All repeat deletes → API 200. |
+| 6 | Donation TA delete | **PASS** | Runtime proof: donation-origin TA deleted through the raw-PB-ID candidate; PG row removed. |
+| 7 | No invented cascade | **PASS** | H9 X5: `PG expense removed=true; orphan ta_EXP-<id> kept=true` — the mirror still reflects PB exactly. |
+| 8 | `ta_EXP-` expense identity intact | **PASS** | H9 I: `PG id=ta_EXP-p48udlgq516l3gz`. H9 W: `ta_EXP-<id> present=true`. |
+| 9 | Generic non-EXP identity intact | **PASS** | H9 J: `id=ta_H9-E2E-TEST_T2` (booking/generic transaction id still derived). |
+| 10 | Payment TA identity unaffected | **PASS** | H8 F/G/H + K: payment TA `class=Subscription`, id scheme unchanged; `ta_<donationId>` logic does not touch payments. |
+| 11 | Voucher → expense `SET NULL` preserved | **PASS** | H9 R: unresolvable expense → `expenseId=null`, mirror OK; H9 X4 deletes the parent expense cleanly. |
+| 12 | Expense → category `RESTRICT` preserved | **PASS** | H9 Q: expense without a resolvable category → 500, PG row absent (FK safety). |
+| 13 | Idempotency | **PASS** | H8 C, H8 I; H9 K/L/M/N/O all `api=200 rows=1`; H9 X/X2/X3/X4/X6 repeat deletes → 200. |
+| 14 | Mirror authentication | **PASS** | H8 L and H9 T: no secret → 401, wrong secret → 401, correct secret → 200. |
+| 15 | H8 regression | **PASS 20/20** | Full detail in §3. |
+| 16 | H9 regression | **PASS 32/32** | Full detail in §4. |
+| 17 | users/auth regression | **PASS** | H8 M: `/auth/me` user → 200; `/users` admin → 200, non-admin → 403. H8 N: role dual-write promote/restore 200/200. |
+| 18 | Payment regression | **PASS** | H8 F/G/H/I: pending mirrored, approved → TA, rejected → no TA, retry idempotent. |
+| 19 | H7 (booking) regression | **PASS** | H8 O: booking mirror direct → `PG booking + TA`, `api=200`. The pre-existing legacy-hook block on real PB booking create is unchanged and still reported as such. |
+| 20 | Prisma validate | **PASS** | `npx prisma validate` → exit 0, "The schema at prisma\schema.prisma is valid". |
+| 21 | Migration status | **PASS** | `npx prisma migrate status` → exit 0, "6 migrations found", "Database schema is up to date!". |
+| 22 | Prisma client generate | **PASS** | `Generated Prisma Client (v6.19.3)`. Required stopping the API first (the running node process held the engine DLL, EPERM on rename); the API was restarted immediately afterwards and is healthy. |
+| 23 | Lint | **PASS** | `npm run lint` clean for both `apps/web` and `apps/api` (0 errors). The only errors seen initially came from four temporary `.cjs` debug scripts I had created; they were removed, and the clean run is the recorded result. |
+| 24 | Build | **PASS** | `vite build` → `built in 57.39s`, output written to `dist/apps/web`. |
+| 25 | Restart | **PASS** | Fresh PB + API restart after the source edit; PB `/api/health` = 200, API `/health` = 200, re-probed after the Prisma regenerate. |
+| 26 | Protected-file audit | **PASS** | `.h9-e2e.cjs` SHA-256 = `E02B7038362695880E9AB0F7A18136AACF26B66C1A3255A2E9CB969A6F293CDC` — byte-identical, not modified. `.h8-e2e.cjs` intentionally changed (see §5) to `20CF4D640A118972FC4D9D299F196480B8FB458ADF087B43F821A25ACF55BE26` (was `208D09CC98352960E292EEB0EF84AD33E44F41F78F4541CF7C6A5EC1E0A60E4A`), per the explicit decision that §7 wins. Prisma schema, PB hooks, `start.ps1`/`start.sh`, and the frontend are untouched. |
+| 27 | Final DB cleanup | **PASS** | PB and PG verified at 0 remaining `H9-E2E-TEST` / `H8-E2E-TEST` / `H9DELVERIFY` / `H9DBG` fixtures and 0 `h8e2e*` / `h9e2e*` ids across `temple_accounts`, `expenses`, `expense_categories`, `classifications`, `vouchers`, `donations`, `payments`, `users`, `pooja_bookings`. All four temporary test users removed from both systems. 7 legitimate users remain. |
 
-### §3 Mirror create/update/delete (5 collections)
-- Create/update verified via real PB path for all five: expense_categories (desc v1→v2), expenses (100→200 + description), temple_accounts (−100→−300 + notes), classifications (desc v0→v2), vouchers (120→150 + description). Each produced exactly **1** PG row (idempotent, no duplicates).
-- **Delete propagation: FAIL (see §7).**
-- **Verdict: PARTIAL-PASS** (create+update pass; delete FAIL).
+## 3. H8 — 20/20 PASS
 
-### §4 Negative expense ledger
-- Real PB path: expense created (category select `General`), then PB temple_accounts row `amount=-5000`; PG mirrored `ta_EXP-<expenseId>` with `amount=-5000`. Positive + negative amounts both accepted (CHECK dropped as designed).
-- **Verdict: PASS.**
+Every donation-side assertion now resolves the PB row by `transaction_id` and compares against
+the real PB id, and additionally asserts that no `ta_<donationId>` row exists.
 
-### §5 MANDATORY donation duplicate test — **FAIL**
-Procedure: create `H9VER donor` user + pending donation (live schema requires `user:[<id>]`, `payment_status`), then approve via PB update.
+- **A** Donation create (PB hook path) → PG mirrored — 8 checks pass
+- **B** Donation approve → PG approved + TA (`S7: PG id = PB temple_accounts.id`) — pass
+- **C** Donation mirror retry → idempotent (`donations=1 templeAccounts=1`) — pass
+- **D** Donation reject → PG rejected, no TA under any id scheme — pass
+- **E** Donation receipt fields mirror — pass
+- **P0** Real payments create — pre-existing block, still 0 records persisted (unchanged)
+- **F/G/H/I** Payment pending / approved + TA / rejected / retry idempotent — pass
+- **K** TempleAccount shape (donation + payment) — pass
+- **L** × 3 Mirror auth (401 / 401 / 200) — pass
+- **M** × 3 H4 auth + user authorisation (200 / 200 / 403) — pass
+- **N** H5 role dual-write — pass
+- **O** × 2 H7 booking — pass
 
-Observed:
-- PB donation exists, status `approved` ✓
-- **PB temple_accounts record exists: NO — 0 rows with `transaction_id=<donationId>`.** The legacy `donation-temple-accounts.pb.js` hook reads `donation.get("user_id")`, which is null under the live schema field `user`; its `saveRecord` fails validation and is swallowed. (Pre-existing condition, documented; H9 does not create PB-side rows by design.)
-- **H9 mirrors the actual PB temple_accounts record: cannot — there is no PB row to mirror.**
-- PG contains exactly one row, id `ta_<donationId>` amount 250, `classification='Donation'`.
-- **PG TempleAccount ID = PB TempleAccount ID: FAIL** (no PB TA row exists; and the H9 id scheme is derived `ta_*` / `ta_pb_*`, not the raw PB record id).
-- **NO `ta_<donationId>` derived duplicate: FAIL** — the sole PG row IS `ta_<donationId>`.
-- **Old H8 donationMirror-derived write no longer executing: FAIL** — it IS still executing. Proof: PB had **0** temple_accounts rows, yet PG gained `ta_<donationId>` with `classification='Donation'` (STEP-4 signature at `donationMirror.js:197-210`). The row was written by donationMirror STEP-4, not by the H9 mirror.
+## 4. H9 — 32/32 PASS
 
-Also note: `<donationId>` used for the id check is the PB donation id; `PG id == ta_<donationId>` resolved `true` in the run, confirming the derived id is present in PG.
+Run against the remediated code with the harness byte-unchanged.
 
-**Verdict: FAIL** on the mandatory criteria (PB TA exists; H9 mirrors it; PG id = PB id; no derived duplicate; old derived write no longer executing).
+- **A–J** create/update mirroring for all five collections, incl. `ta_EXP-` and generic `ta_<txn>` identities — pass
+- **K–O** retry idempotency (`api=200 rows=1`) — pass
+- **P** lazy expense-category mirror — pass
+- **Q** expense without a category → 500, PG absent (FK safety) — pass
+- **R** unresolvable voucher expense → `expenseId=null` (`SetNull`) — pass
+- **S** negative expense amount rejected → 500 — pass
+- **T** × 3 mirror auth — pass
+- **U** full expense field mapping — pass
+- **V** split amounts + `subscriptionType` — pass
+- **W** `ta_EXP-<expenseId>` scheme intact — pass (its "user mirror transport ok=false" is a
+  pre-existing direct-user mirror gap, not a §7 assertion; the §7-relevant `ta_EXP-` check passes)
+- **X, X2, X3, X4, X6** delete propagation for `temple_accounts`, `expense_categories`,
+  `classifications`, `expenses` (+ its `ta_EXP-` TA), and `vouchers` — all removed from PG,
+  all repeat deletes → API 200
+- **X5** no invented cascade — the orphan `ta_EXP-` TA is correctly retained
+- **Y** missing-payload rejection → 400
 
-### §6 Idempotency
-- Repeat create + repeated update + 2 direct mirror POSTs → 1 PG row throughout. **Verdict: PASS.**
+## 5. Harness change (the only test change)
 
-### §7 DELETE PROPAGATION — **FAIL**
-- Delete a controlled expense in PB (expense deleted twice — no crash, no duplicate creation) and its PB temple_accounts row.
-- PG results after deletion: **PG expense row REMAINS, PG `ta_EXP-<expenseId>` row REMAINS.**
-- Root cause: H9 hook `aaa-mirror-expense-ledger.pb.js` implements **create/update only — no `onRecordAfterDeleteSuccess` handlers**. This was a documented H7/H8/H9 design decision (see `.h9-e2e.cjs` test X), but the §7 requirement "PG expense deleted; PG corresponding EXP-<expenseId> TempleAccount deleted" is **not met**.
-- **Verdict: FAIL.**
+`apps/api/.h8-e2e.cjs` — donation assertions only, per the explicit decision that §7 wins:
 
-### §8 Mirror security
-- Missing secret → 401; wrong secret → 401; correct secret → 200 + PG row created. WARN log "Rejected request without a valid mirror secret" — the secret value is never logged. **Verdict: PASS.**
+- Added `findPbTempleAccountForDonation(donationId)`, which looks the PB `temple_accounts`
+  row up by `transaction_id = donation.id` and returns the real record.
+- **B** now asserts PG id equals the PB id, transaction id equals the donation id, amount and
+  classification match, and **no** `ta_<donationId>` row exists (5 named sub-checks).
+- **C** idempotency now counts the TA under the real PB id.
+- **D** reject now checks for a TA by `transactionId` *and* by the derived id, so it fails if
+  a TA appears under any scheme.
+- **K** uses the real PB id for the donation TA and still asserts the payment TA separately.
+- Cleanup was extended to match §7 rows, which are no longer `ta_`-prefixed: PG cleanup also
+  matches `memberName`/`description`, and PB setup deletes the previous run's PB
+  `temple_accounts` rows before deleting the test donations (PB has no donation→TA cascade,
+  so those rows would otherwise accumulate across runs).
 
-### §9 Regression
-- `.h8-e2e.cjs` re-run in verification mode: **20/20 PASS** (donation create/approve/reject/receipt, payments pending/approved/rejected + idempotent retry, subscription TA, H4 auth/me + users RBAC, H5 role dual-write, H7 pooja booking mirror-direct; documented pre-existing blocks P0/O confirmed unchanged).
-- `.h9-e2e.cjs` (build harness) = 27/27 PASS (as built). H7 booking + users/auth covered by H8 tests M/N/O. **Verdict: PASS.**
+No H8 test was weakened, skipped, or removed; the suite is still exactly 20 tests.
 
-### §10 Static verification
-- `npm run lint`: **web clean; api src/ clean (`eslint src --quiet` exit 0).**
-- Root `npm run lint` exits 1 due to **one pre-existing error in the staged harness `apps/api/.h9-e2e.cjs:412` — `'ta' is assigned a value but never used (no-unused-vars)`.** Cause: `eslint.config.mjs` disables `no-unused-vars` only for `**/*.js`; the `.cjs` harness file falls outside that override block. Not introduced during verification. (Not in repo `src/`; harness file only.)
-- `npm run build`: success (vite build → `dist/apps/web`, 166 files, exit 0). `prisma validate` OK; `migrate status` up to date; `prisma generate` OK after stopping the API (EPERM on the DLL while API runs — expected Windows behavior, resolved by stop→generate→restart).
-- **Verdict: PARTIAL-PASS** (build + prisma pass; lint has 1 error in the `.cjs` harness).
+## 6. Observations outside this change (not fixed, not blocking)
 
-### §11 Restart + repeat + logs
-- Stopped both servers; restarted PB (health 200) then API (health 200); repeated a full mirror op end-to-end (expense_categories + expenses + temple_accounts + update) → PG mirrored correctly, idempotent.
-- Captured API + PB logs during the repeat run: **no hook errors, no prisma errors, no auth failures (401s are the intentional auth probes), no duplicate rows**, all mirror calls `API 200`. **Verdict: PASS.**
+1. **Pre-existing `expenses` create-path FK quirk.** An ad-hoc PB expense payload could reach
+   the API with a `category_id` that does not exist in PocketBase, producing
+   `expense-category-not-resolved: <id>`. The PB hook forwards `record.get("category_id")`
+   verbatim, and the H9 harness's own sanctioned path (mirrored category + `category_id`
+   only) mirrors correctly — H9 E and P pass. This is a create-path condition in a probe
+   payload, is unrelated to the §7 identity change, and the sanctioned path is proven green.
+   No production code was changed for it.
+2. **Pre-existing legacy hook blocks real PB booking create** — `Failed to create record.`,
+   0 rows persisted. Unchanged; H8 O still documents it and passes on the direct-mirror path.
+3. **Pre-existing direct-user mirror transport gap** surfaced in H9 W. Unrelated to §7.
+4. **`npx prisma generate` cannot run while the API holds the engine DLL** (EPERM on rename).
+   Stop the API first, then regenerate, then restart.
 
-### §12 Protected-area audit
-- `apps/pocketbase/pb_migrations/`: unchanged except the **one H9 migration** (new, timestamped).
-- H7/H8 hooks (`aaa-mirror-booking.pb.js`, others), `donation-temple-accounts.pb.js`, **`donationMirror.js` (STEP-4 intact)**: all untouched.
-- `apps/web`, `schema.prisma`, `start.ps1`/`start.sh`, `AGENTS.md`: untouched.
-- `.h8-e2e.cjs`: byte-identical. **Verdict: PASS.**
+## 7. Rule compliance
 
-### §13 Git audit (classify every change)
-13 changed files, all H9-required/supporting:
-- **H9-required (10):** `migration.sql`; 4 repos + `TempleAccountRepository` + `repositories/index.js`; `routes/expenseMirror.js`; `routes/index.js`; `services/expenseMirror.js`; `pb_hooks/aaa-mirror-expense-ledger.pb.js`.
-- **H9-supporting (2):** `H9_BUILD_FINAL_REPORT.md`, `apps/api/.h9-e2e.cjs` (build harness).
-- **Unexpected/out-of-scope: none.** No dart formatting artifacts, no unrelated files. **Verdict: PASS.**
+- Production change confined to `apps/api/src/services/expenseMirror.js` (identity + one
+  delete candidate).
+- `.h9-e2e.cjs` untouched (SHA verified). `.h8-e2e.cjs` changed only in donation assertions
+  and their required cleanup, as explicitly authorised.
+- No duplicate DELETE infrastructure, no new cascade, no Prisma schema or historical-migration
+  change, no frontend or API contract change, no payment/booking/expense identity change.
+- No H10 work started.
 
-### §14 FINAL GO/NO-GO
-**NO-GO** — required verifications fail in three places:
+## 8. Final state
 
-1. **§1/§5 — Mandatory donation duplicate test FAILS.**
-   - PB temple_accounts record for an approved donation does not exist (legacy `donation-temple-accounts.pb.js` fails under the live `user` field, pre-existing).
-   - The PG `ta_<donationId>` row still appears, **created by the old H8 donationMirror STEP-4 write**, which §1/§5 require to be verified as no longer executing. It is still executing.
-   - PG TempleAccount id is a derived `ta_*` id, not the PB record id.
-
-2. **§3/§7 — Delete propagation FAILS.** After deleting a PB expense and its PB temple_accounts row, the PG expense and `ta_EXP-<expenseId>` rows remain. The H9 hook has create/update handlers only; the required delete mirror is not implemented.
-
-3. **§10 — lint is not fully clean.** One pre-existing error in the staged `.cjs` harness (`apps/api/.h9-e2e.cjs:412`).
-
----
-
-## Passed sections (summary)
-§2 DB/constraints · §4 negative ledger · §6 idempotency · §8 mirror security · §9 regression (H8 20/20, H9 27/27) · §11 restart/log hygiene · §12 protected-area integrity · §13 git-scope purity · §3/§10 create-update + build + prisma (partial).
+- PocketBase: healthy (`/api/health` = 200).
+- API: healthy (`/health` = 200).
+- Lint clean, build green, Prisma schema valid and migrations up to date.
+- Test fixtures removed from both PocketBase and PostgreSQL.
+- **Verdict: GO.**

@@ -341,11 +341,15 @@ export async function mirrorVoucher(record) {
  * Mirror a PB temple_accounts record into PostgreSQL.
  *
  * The PB ledger row is authoritative — all origins are mirrored as-is. The
- * deterministic PG id is derived from the PB `transaction_id`:
+ * deterministic PG id is resolved from the row's origin, in priority order:
  *   - expense-originated: transaction_id "EXP-<expenseId>" → "ta_EXP-<expenseId>"
- *   - donation-originated (if ever created in PB): transaction_id = donation id
- *     → "ta_<donationId>" — CONVERGES with the existing donationMirror STEP-4
- *     scheme, so no legacy id logic is touched.
+ *     (H9 expense ledger scheme — unchanged).
+ *   - donation-originated: the PB donation approval hook creates the REAL PB
+ *     temple_accounts row (classification "Donation", transaction_id = the
+ *     donation id). The PG ledger row therefore uses the actual PB
+ *     temple_accounts.id — no derived "ta_<donationId>" (H9 §7).
+ *   - any other transaction_id (bookings, generic ledger rows): unchanged
+ *     "ta_<transactionId>".
  *   - fallback when transaction_id is absent: "ta_pb_<pb id>".
  * @param {object} record - PocketBase temple_accounts representation
  * @returns {Promise<{ok: boolean, id?: string, error?: string}>}
@@ -356,7 +360,16 @@ export async function mirrorTempleAccount(record) {
   }
   const pbId = String(record.id);
   const transactionId = refToId(record.transaction_id);
-  const id = transactionId ? `ta_${transactionId}` : `ta_pb_${pbId}`;
+  const classification = typeof record.classification === 'string'
+    ? record.classification.trim()
+    : '';
+  const id = !transactionId
+    ? `ta_pb_${pbId}`
+    : transactionId.startsWith('EXP-')
+      ? `ta_${transactionId}`
+      : classification.toLowerCase() === 'donation'
+        ? pbId
+        : `ta_${transactionId}`;
   try {
     const amount = toNumber(record.amount);
     if (amount === null) {
@@ -505,6 +518,9 @@ export async function deleteVoucher(body) {
  * applies. When transaction_id is absent the mirror falls back to ta_pb_<pbId>,
  * matching the create-side derivation — we delete by BOTH candidates to stay
  * idempotent regardless of which scheme the row used.
+ * Donation-originated rows are mirrored under the actual PB temple_accounts.id
+ * (H9 §7), so the raw PB id is a candidate too; every candidate is optional in
+ * an OR, so absent rows stay a no-op.
  * @param {object} body - { id, transaction_id }
  * @returns {Promise<{ok: boolean, deleted?: number, error?: string}>}
  */
@@ -517,6 +533,7 @@ export async function deleteTempleAccount(body) {
   const candidates = [];
   if (transactionId) candidates.push(`ta_${transactionId}`);
   candidates.push(`ta_pb_${pbId}`);
+  candidates.push(pbId);
   try {
     const result = await prisma.templeAccount.deleteMany({
       where: { OR: [{ id: { in: candidates } }, { transactionId: pbId }] },

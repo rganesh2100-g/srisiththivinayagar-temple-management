@@ -53,6 +53,17 @@ async function apiJson(path, opts = {}) {
   return { status: res.status, body };
 }
 
+// H9 §7: a donation-originated TempleAccount is mirrored under the ACTUAL PB
+// temple_accounts.id (never a derived ta_<donationId>). Look the PB row up by
+// its transaction_id (= donation id) so the assertions verify the real identity.
+async function findPbTempleAccountForDonation(donationId) {
+  const rows = await pbAdmin
+    .collection("temple_accounts")
+    .getFullList({ filter: `transaction_id="${donationId}"`, perPage: 5 })
+    .catch(() => []);
+  return rows && rows[0] ? rows[0] : null;
+}
+
 const TEST_TAG = "H8-E2E-TEST";
 let pbAdmin;
 let userToken;
@@ -93,6 +104,13 @@ async function setup() {
   pbAdmin = new PocketBase(PB_URL);
   await pbAdmin.collection("_superusers").authWithPassword(ADMIN_EMAIL, ADMIN_PASS);
 
+  // H9 §7: the donation approval hook creates PB temple_accounts rows keyed by
+  // transaction_id = donation.id. PB does not cascade them when the donation is
+  // deleted, so remove the previous run's rows before the donations disappear.
+  const staleDonations = await pbAdmin.collection("donations").getFullList({ filter: `notes~"${TEST_TAG}"`, perPage: 200 }).catch(() => []);
+  for (const d of staleDonations) {
+    await pbDeleteByFilter("temple_accounts", `transaction_id="${d.id}"`);
+  }
   await pbDeleteByFilter("donations", `notes~"${TEST_TAG}"`);
   await pbDeleteByFilter("payments", `transaction_id~"H8_E2E_TXN"`);
   await pbDeleteByFilter("receipts", `receipt_id~"H8_E2E_RCP"`);
@@ -123,7 +141,10 @@ async function pgCleanup() {
   await prisma.payment.deleteMany({ where: { OR: [{ transactionId: { startsWith: "H8_E2E_TXN" } }, { id: { startsWith: "h8e2epay" } }] } }).catch(() => {});
   await prisma.poojaBooking.deleteMany({ where: { id: { in: ["h8e2ebooking001"] } } }).catch(() => {});
   await prisma.pooja.deleteMany({ where: { id: { in: ["h8e2epoojacreatetime"] } } }).catch(() => {});
-  await prisma.templeAccount.deleteMany({ where: { OR: [{ id: { startsWith: "ta_" } }, { transactionId: { startsWith: "h8e2e" } }] } }).catch(() => {});
+  // H9 §7: donation TempleAccounts are mirrored under the real PB id, so they are
+  // matched by member_name (the PB user id set by the approval hook), by
+  // transactionId, or by the legacy ta_ prefix.
+  await prisma.templeAccount.deleteMany({ where: { OR: [{ id: { startsWith: "ta_" } }, { transactionId: { startsWith: "h8e2e" } }, { memberName: { contains: TEST_TAG } }, { description: { contains: TEST_TAG } }] } }).catch(() => {});
   await prisma.user.deleteMany({ where: { OR: [{ email: H8_ADMIN_EMAIL }, { email: H8_USER_EMAIL }] } }).catch(() => {});
 }
 
@@ -166,17 +187,33 @@ async function main() {
   });
 
   // ================= B. DONATION APPROVE (PB update may 400 but commits) =================
-  await assert("B. Donation approve (PB update) -> PG approved + TA", async () => {
+  await assert("B. Donation approve (PB update) -> PG approved + TA (S7: PG id = PB temple_accounts.id)", async () => {
     fb = await pbAdmin.collection("donations").update(donationA.id, { status: "approved", approval_date: new Date().toISOString() }).catch((e) => e);
     const pbState = await pbAdmin.collection("donations").getOne(donationA.id).catch(() => null);
+    // the PB approval hook creates the real PB temple_accounts row
+    const pbAppeared = await waitFor(async () => !!(await findPbTempleAccountForDonation(donationA.id)));
+    if (!pbAppeared) return { ok: false, detail: `PB update=${fb && fb.message ? fb.message : "ok"}; PB after_state=${pbState && pbState.status}; no PB temple_accounts for donation` };
+    const pbTa = await findPbTempleAccountForDonation(donationA.id);
     const ok = await waitFor(async () => {
       const r = await prisma.donation.findUnique({ where: { id: donationA.id } });
       if (!r || r.status !== "approved") return false;
-      return !!(await prisma.templeAccount.findUnique({ where: { id: `ta_${donationA.id}` } }));
+      return !!(await prisma.templeAccount.findUnique({ where: { id: pbTa.id } }));
     });
     if (!ok) return { ok: false, detail: `PB update=${fb && fb.message ? fb.message : "ok"}; PB after_state=${pbState && pbState.status}; PG not approved or TA missing` };
-    const ta = await prisma.templeAccount.findUnique({ where: { id: `ta_${donationA.id}` } });
-    return { ok: true, detail: `PB update feedback=${fb && fb.message ? "ERR(" + fb.message + ")" : "ok"}; PG approved; TA(amount=${ta.amount}, class=${ta.classification}, cat=${ta.category})` };
+    const ta = await prisma.templeAccount.findUnique({ where: { id: pbTa.id } });
+    const derived = await prisma.templeAccount.findUnique({ where: { id: `ta_${donationA.id}` } });
+    const checks = {
+      idEqualsPbId: ta.id === pbTa.id,
+      txnIsDonation: ta.transactionId === donationA.id,
+      amount: Number(ta.amount) === Number(pbTa.amount),
+      class: ta.classification === "Donation",
+      noDerivedId: !derived,
+    };
+    const all = Object.values(checks).every(Boolean);
+    return {
+      ok: all,
+      detail: `PB update feedback=${fb && fb.message ? "ERR(" + fb.message + ")" : "ok"}; PB TA id=${pbTa.id}; PG id=${ta.id} txn=${ta.transactionId} amount=${ta.amount} class=${ta.classification} cat=${ta.category} ta_<donationId>present=${!!derived} ${JSON.stringify(checks)}`,
+    };
   });
 
   // ================= C. DONATION RETRY (idempotency) =================
@@ -185,8 +222,9 @@ async function main() {
       method: "POST", headers: mirrorHeader(SECRET), body: JSON.stringify(donationPayloadFor(donationA)),
     });
     const d = await prisma.donation.count({ where: { id: donationA.id } });
-    const t = await prisma.templeAccount.count({ where: { id: `ta_${donationA.id}` } });
-    return { ok: r.status === 200 && d === 1 && t === 1, detail: `api=${r.status} donations=${d} templeAccounts=${t}` };
+    const pbTa = await findPbTempleAccountForDonation(donationA.id);
+    const t = pbTa ? await prisma.templeAccount.count({ where: { id: pbTa.id } }) : 0;
+    return { ok: r.status === 200 && d === 1 && t === 1, detail: `api=${r.status} donations=${d} templeAccounts=${t} (id=${pbTa && pbTa.id})` };
   });
 
   // ================= D. DONATION REJECT =================
@@ -203,8 +241,10 @@ async function main() {
       return r && r.status === "rejected";
     });
     if (!ok) return { ok: false, detail: "PG not rejected" };
-    const ta = await prisma.templeAccount.findUnique({ where: { id: `ta_${donationD.id}` } });
-    return { ok: !ta, detail: `PG status=rejected TA=${ta ? "PRESENT(BAD)" : "absent(GOOD)"}` };
+    // a rejected donation must have no TempleAccount under ANY id scheme
+    const byTxn = await prisma.templeAccount.findFirst({ where: { transactionId: donationD.id } });
+    const derived = await prisma.templeAccount.findUnique({ where: { id: `ta_${donationD.id}` } });
+    return { ok: !byTxn && !derived, detail: `PG status=rejected TA_byTransactionId=${byTxn ? "PRESENT(BAD)" : "absent(GOOD)"} TA_ta_derived=${derived ? "PRESENT(BAD)" : "absent(GOOD)"}` };
   });
 
   // ================= E. DONATION RECEIPT FIELDS =================
@@ -315,11 +355,22 @@ async function main() {
 
   // ================= K. TEMPLE ACCOUNT SHAPE =================
   await assert("K. TempleAccount shape (donation + payment)", async () => {
-    const dta = await prisma.templeAccount.findUnique({ where: { id: `ta_${donationA.id}` } });
+    // donation: H9 §7 — PG id is the ACTUAL PB temple_accounts.id
+    const pbTa = await findPbTempleAccountForDonation(donationA.id);
+    const dta = pbTa ? await prisma.templeAccount.findUnique({ where: { id: pbTa.id } }) : null;
+    const dDerived = await prisma.templeAccount.findUnique({ where: { id: `ta_${donationA.id}` } });
+    // payment: unchanged ta_<paymentId> identity
     const pta = await prisma.templeAccount.findUnique({ where: { id: `ta_${paymentDirect}` } });
+    const monthName = new Date().toLocaleDateString("en-US", { month: "long" });
+    const year = new Date().getFullYear();
+    const ok =
+      !!pbTa && !!dta && dta.id === pbTa.id && !dDerived &&
+      dta.transactionId === donationA.id &&
+      dta.month === monthName && dta.year === year && dta.classification === "Donation" &&
+      !!pta && pta.classification === "Subscription";
     return {
-      ok: !!dta && !!pta && dta.month === new Date().toLocaleDateString("en-US", { month: "long" }) && dta.year === new Date().getFullYear() && dta.classification === "Donation" && pta.classification === "Subscription",
-      detail: `donationTA(amount=${dta && dta.amount}, class=${dta && dta.classification}, month=${dta && dta.month}, year=${dta && dta.year}) | paymentTA(amount=${pta && pta.amount}, status=${pta && pta.status}, sub=${pta && pta.subscriptionType}, month=${pta && pta.month}, year=${pta && pta.year})`,
+      ok,
+      detail: `donationTA(pbId=${pbTa && pbTa.id}, pgId=${dta && dta.id}, txn=${dta && dta.transactionId}, amount=${dta && dta.amount}, class=${dta && dta.classification}, month=${dta && dta.month}, year=${dta && dta.year}, ta_<donationId>present=${!!dDerived}) | paymentTA(amount=${pta && pta.amount}, status=${pta && pta.status}, sub=${pta && pta.subscriptionType}, month=${pta && pta.month}, year=${pta && pta.year})`,
     };
   });
 
