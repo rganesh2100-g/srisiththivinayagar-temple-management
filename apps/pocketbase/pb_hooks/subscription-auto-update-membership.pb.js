@@ -7,16 +7,16 @@ onRecordAfterUpdateSuccess((e) => {
   if (status === "active" || status === "approved") {
     try {
       // Fetch the user record
-      const userRecord = $app.dao().findRecordById("_pb_users_auth_", userId);
-      
+      const userRecord = $app.findRecordById("_pb_users_auth_", userId);
+
       if (userRecord) {
         // Update user membership fields
         userRecord.set("membership_type", "premium");
         userRecord.set("premium_status", "Active");
         userRecord.set("subscription_status", "premium");
-        
+
         // Save the updated user record
-        $app.dao().saveRecord(userRecord);
+        $app.save(userRecord);
       }
     } catch (err) {
       console.log("Error updating user membership: " + err.message);

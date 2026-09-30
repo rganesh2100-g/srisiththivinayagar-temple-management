@@ -523,7 +523,11 @@ model Donation {
 // CHECK: durationMonths >= 1 AND durationMonths <= 120
 // CHECK: endDate > startDate
 model Subscription {
-  id              String                    @id @default(uuid()) @db.VarChar(36)
+  // H10: id is the ACTUAL PocketBase subscriptions.id (15-char PB key stored in
+  // a VarChar(36) column). There is deliberately no @default(uuid()) here: the
+  // H9 identity rule forbids a second generated identity, and the mirror is
+  // idempotent precisely because this column is the PB primary key.
+  id              String                    @id @db.VarChar(36)
   userId          String                    @db.VarChar(36)
   planType        SubscriptionPlanType      @default(premium)
   amount          Decimal                   @db.Decimal(10, 2)

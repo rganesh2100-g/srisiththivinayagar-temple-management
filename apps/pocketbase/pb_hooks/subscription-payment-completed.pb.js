@@ -3,17 +3,21 @@ onRecordAfterUpdateSuccess((e) => {
   try {
     const subscription = e.record;
     const original = e.record.original();
-    
-    // Only process if status changed to Approved
+
+    // NOTE: the subscriptions collection only allows the lowercase status
+    // values pending/active/rejected, so this branch does not currently run.
+    // It is retained (repaired for PocketBase 0.23+ APIs) but deliberately not
+    // retargeted at "active": creating temple_accounts rows here would be a new
+    // financial side effect that must be mirrored with the H9 identity rules
+    // before it is ever allowed to fire.
     if (original.get("status") !== "Approved" && subscription.get("status") === "Approved") {
       const userId = subscription.get("user_id");
       const amount = subscription.get("amount");
-      const subscriptionType = subscription.get("subscription_type");
       const approvedDate = new Date().toISOString().split('T')[0];
 
       // Create temple account entry for subscription payment
-      const templeAccount = new Record();
-      templeAccount.collection().name = "temple_accounts";
+      const templeAccountsCollection = $app.findCollectionByNameOrId("temple_accounts");
+      const templeAccount = new Record(templeAccountsCollection);
       templeAccount.set("member_name", userId);
       templeAccount.set("amount", amount);
       templeAccount.set("category", "Membership");
@@ -23,14 +27,14 @@ onRecordAfterUpdateSuccess((e) => {
       templeAccount.set("transaction_id", subscription.get("transaction_id"));
       templeAccount.set("subscription_id", subscription.id);
 
-      $app.dao().saveRecord(templeAccount);
+      $app.save(templeAccount);
 
       // Update user's membership tier
       try {
-        const user = $app.dao().findRecordById("users", userId);
+        const user = $app.findRecordById("users", userId);
         if (user) {
           user.set("membershipTier", "premium");
-          $app.dao().saveRecord(user);
+          $app.save(user);
         }
       } catch (userError) {
         console.log("Could not update user membership tier:", userError.message);

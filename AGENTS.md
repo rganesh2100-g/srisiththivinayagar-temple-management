@@ -65,32 +65,46 @@ HARD EXIT RULE (apply to EVERY bash command, not just health checks):
 
 ### Detaching a background server (the shell must NEVER stay open)
 
-Symptom: a command prints its result (e.g. `PB_HEALTH=200`) but the tool call never returns, so the session appears stuck on that step even though the work succeeded.
+Symptom: a command prints its result (e.g. `PB_HEALTH=200`) but the tool call never returns, so the session appears stuck on that step even though the work succeeded. The output arrives twice (once from the command, once echoed by the user re-running it) and the next step never starts.
 
-Cause: `Start-Process` WITHOUT `-WindowStyle Hidden` keeps the child attached to the console, and `-RedirectStandardOutput` / `-RedirectStandardError` keep the parent's stdout/stderr pipes open. The shell then waits on those handles for the lifetime of the long-running child.
+Cause: `Start-Process` creates a child that stays in the same console/job. Even with `-WindowStyle Hidden` and `-RedirectStandard*`, PowerShell 5.1 still holds the parent's handles open, so the tool waits for the long-running child. **`Start-Process` is UNRELIABLE for detaching long-lived servers here — do not use it for PocketBase, the API, Vite, or any daemon.**
 
-Mandatory pattern for every detached launch (PB, API, or any daemon):
+MANDATORY pattern: launch via WMI (`Win32_Process::Create`). The child is created by the WMI service, inherits NO console handles, and the launching command returns immediately.
 
 ```powershell
-$p = Start-Process -FilePath "<exe>" -ArgumentList "<args>" -WorkingDirectory "<dir>" `
-       -PassThru -WindowStyle Hidden `
-       -RedirectStandardOutput "$env:TEMP\<name>.log" `
-       -RedirectStandardError  "$env:TEMP\<name>.err"
-Write-Output "PID=$($p.Id)"
-Start-Sleep -Seconds <n>
-curl.exe -s -o NUL --max-time 5 -w "HEALTH=%{http_code}`n" "<url>"
+# 1) stop any existing listener (no output inheritance)
+Get-CimInstance Win32_Process -Filter "Name='pocketbase.exe'" |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 2
+
+# 2) launch fully detached via WMI, exporting env vars through `cmd /c "set ..."`
+$cmd = 'cmd /c "set PB_SUPERUSER_EMAIL=admin@localhost.com' +
+       '&& set PB_SUPERUSER_PASSWORD=admin123456' +
+       '&& set BOOKING_MIRROR_SECRET=<from apps/api/.env>' +
+       '&& set BOOKING_MIRROR_API_URL=http://localhost:3001' +
+       '&& ""<abs>\apps\pocketbase\pocketbase.exe"" serve --http=0.0.0.0:8090 ' +
+       '> ""%TEMP%\pb.log"" 2>&1"'
+$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create `
+       -Arguments @{ CommandLine = $cmd; CurrentDirectory = '<abs>\apps\pocketbase' }
+Write-Output "PB ReturnValue=$($r.ReturnValue) PID=$($r.ProcessId)"
+if ($r.ReturnValue -ne 0) { Write-Output "PB launch FAILED"; exit 1 }
+
+# 3) health probe with a hard timeout, then hard exit
+Start-Sleep -Seconds 5
+curl.exe -s -o NUL --max-time 5 -w "PB_HEALTH=%{http_code}`n" "http://localhost:8090/api/health"
 [System.Console]::Out.Flush()
 exit 0
 ```
 
 Rules:
-- ALWAYS pass `-WindowStyle Hidden` to `Start-Process` so the child never attaches to the console.
-- ALWAYS redirect to a file under `$env:TEMP`; never leave stdout inherited.
-- ALWAYS end the launching command with `exit 0` on its own final line.
-- If output still appears to be withheld, add `[System.Console]::Out.Flush()` before `exit 0`.
-- Never combine a launch with a long-running foreground command in the same call — launch + health probe only, then stop.
-- To confirm a previously launched process is still healthy later, probe it in a SEPARATE command with `curl.exe --max-time`; do not re-launch from the same call.
-- A hung call that already printed its result is NOT a failure of the launched service: re-probe the health endpoint in a fresh command instead of relaunching (avoids duplicate processes fighting over the port).
+- NEVER use `Start-Process` for a long-lived server/daemon. Use `Invoke-CimMethod -ClassName Win32_Process -MethodName Create`.
+- Quote paths with spaces: inner executable path needs doubled quotes `""C:\...\pocketbase.exe""` inside the `cmd /c` string.
+- WMI children do NOT inherit the caller's process env, so pass every required var through `cmd /c "set NAME=value && ..."`. PocketBase needs `PB_SUPERUSER_*` and the mirror needs `BOOKING_MIRROR_SECRET` / `BOOKING_MIRROR_API_URL`.
+- Redirect child output with `> "%TEMP%\<name>.log" 2>&1` inside the `cmd /c` string; never inherit stdout.
+- ALWAYS check `$r.ReturnValue` — `0` means launched, anything else is a launch failure.
+- ALWAYS end with an explicit `exit 0` (or `exit 1` on failure) on its own final line, after `curl.exe --max-time`.
+- If a launch command ever appears to hang, do NOT re-run it: the child may already be running. Probe the port with `curl.exe --max-time` in a fresh command, and check for duplicates with `Get-CimInstance Win32_Process` before relaunching — duplicate servers fight over the port.
+- For SHORT scripts that must be observed (tests, probes), run them with `Start-Process ... -Wait` or capture output to a file and read it in a separate command; do not run them in the foreground when they can exceed the tool timeout.
 
 ## Lint
 

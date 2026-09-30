@@ -96,10 +96,15 @@ const SubscriptionPaymentModal = ({
       endDate.setFullYear(endDate.getFullYear() + 1);
     }
 
+    const durationMonths = selectedType === 'Monthly' ? 1 : 12;
+
     const subscriptionPayload = {
       user: currentUser.id,
+      user_id: currentUser.id,
       plan_type: 'premium',
       billing_cycle: selectedType.toLowerCase(),
+      duration_months: durationMonths,
+      renewal_type: 'manual',
       amount: minAmount,
       custom_donation: numAmount > minAmount ? numAmount - minAmount : 0,
       total_amount: numAmount,
@@ -115,9 +120,12 @@ const SubscriptionPaymentModal = ({
       // Validate all required fields for subscriptions collection before making the API call
       const missingFields = [];
       if (!subscriptionPayload.user) missingFields.push('User ID (relation)');
+      if (!subscriptionPayload.user_id) missingFields.push('User ID');
       if (!subscriptionPayload.plan_type) missingFields.push('Plan Type');
       if (!subscriptionPayload.status) missingFields.push('Status');
       if (!subscriptionPayload.billing_cycle) missingFields.push('Billing Cycle');
+      if (!subscriptionPayload.duration_months) missingFields.push('Duration');
+      if (!subscriptionPayload.renewal_type) missingFields.push('Renewal Type');
       if (!subscriptionPayload.transaction_id) missingFields.push('Transaction ID');
       if (subscriptionPayload.total_amount === undefined || subscriptionPayload.total_amount === null || isNaN(subscriptionPayload.total_amount)) missingFields.push('Total Amount');
 
