@@ -1,561 +1,609 @@
 # H10 Post-Build Verification Report
 
-**Feature:** H10 — PocketBase Subscription/Membership → Express mirror → Prisma → PostgreSQL
+**Feature:** H10 — Subscription / Membership PostgreSQL + Prisma migration & mirroring
 **Date:** 2026-09-30
-**Mode:** Independent verification / closeout (no product code modified, no commit made)
-**Commit under verification:** `9b5ed08` (HEAD → `main`, in sync with `origin/main`)
+**Mode:** Independent post-build verification / closeout
+**Commit under verification:** `9b5ed08` ("docs(agents): replace Start-Process with WMI for detaching daemons" — carries the entire H10 changeset)
+**Governing rule:** *Replace the database, not the application's behaviour.*
 
 ---
 
-## 1. Scope
+## 1. Executive summary
 
-Independently verify that the H10 Subscription/Membership migration is complete and safe
-to close, under the migration rule **"replace the database, not the application's
-behaviour."**
+H10 is verified **GO**. Every required gate was executed in this pass and passed against
+live services. The mirror path `PocketBase → PB hook → Express → Prisma → PostgreSQL`
+works for create, update, approval, rejection, idempotent retry and recovery-from-outage,
+with PocketBase remaining the application-facing, authoritative store.
 
-Verified in this pass:
+| Gate | Result |
+|---|---|
+| Subscription lifecycle | **20/20** |
+| Multi-subscription A/B regression | **8/8** |
+| Mirror suite (identity, fields, idempotency, negatives) | **44/44** |
+| Mirror failure isolation | **9/9** |
+| Mirror authorization | **5/5** (401 / 401 / 200 + 2 negative) |
+| H7 regression | **PASS** |
+| H8 regression | **PASS — 20/20** |
+| H9 regression | **PASS — 32/32** |
+| Prisma validate / migrate status / generate | **PASS** |
+| Lint (root, api, web) | **PASS** |
+| Build | **PASS** |
+| Health (PB 200, API 200) | **PASS** |
+| Cleanup | **PASS — 11/11** |
+| Git audit | **PASS** (no commit made by this verification) |
 
-- Obsolete PocketBase 0.38 API removal in the H10 subscription hooks.
-- Frontend subscription payload contract.
-- Prisma/PostgreSQL identity, fields and migration state.
-- The full PB → API → Prisma → PostgreSQL mirror chain.
-- Identity preservation, idempotency, mirror authentication, failure isolation.
-- Membership-state behaviour (cases A–E).
-- H7/H8/H9 regression.
-- Lint, build, health, cleanup, protected areas, dead code, git state.
+Two non-blocking findings are recorded honestly rather than asserted as passes:
 
-Explicitly **not** done: H11, any new feature, architectural redesign, migration of any
-other domain, modification of any verification harness expectation, and any commit.
+1. **Expiry does not demote Premium** under the *existing* behaviour (Section 5, Step 11).
+2. `AGENTS.md` claims "No README exists", but a root `README.md` **does** exist and its
+   generated hook listing is stale (still lists hooks H10 deleted). Documentation only —
+   no code impact (Section 20).
 
----
-
-## 2. H10 Changes Verified
-
-The H10 implementation was already committed at `9b5ed08` before this pass. Working tree
-contained **no** uncommitted product changes. Nothing was committed by this verification.
-
-`git show --name-status 9b5ed08` (14 files, +618 / −199):
-
-| File | Status | H10 relevance |
-|------|--------|---------------|
-| `apps/pocketbase/pb_hooks/aaa-mirror-subscription.pb.js` | A | H10 core — PB→API forwarding |
-| `apps/api/src/routes/subscriptionMirror.js` | A | H10 core — internal endpoint |
-| `apps/api/src/services/subscriptionMirror.js` | A | H10 core — upsert + membership |
-| `apps/api/src/routes/index.js` | M | H10 — route registration (2 lines) |
-| `apps/api/prisma/schema.prisma` | M | H10 — removed bogus `uuid()` default on `Subscription.id` |
-| `apps/pocketbase/pb_hooks/subscriptions-auto-dates.pb.js` | M | H10 — PB 0.38 repair + date normalization |
-| `apps/pocketbase/pb_hooks/subscription-approval-auto-update.pb.js` | M | H10 — PB 0.38 repair |
-| `apps/pocketbase/pb_hooks/subscription-auto-update-membership.pb.js` | M | H10 — PB 0.38 repair |
-| `apps/pocketbase/pb_hooks/subscription-payment-completed.pb.js` | M | H10 — PB 0.38 repair; dead branch kept inert |
-| `apps/web/src/components/SubscriptionPaymentModal.jsx` | M | H10 — payload + validation |
-| `apps/pocketbase/pb_hooks/diagnostic-subscriptions-analysis.pb.js` | D | H10 cleanup — diagnostic removed |
-| `apps/pocketbase/pb_hooks/diagnostic-subscriptions-schema.pb.js` | D | H10 cleanup — diagnostic removed |
-| `apps/pocketbase/pb_hooks/subscription-diagnostic-query.pb.js` | D | H10 cleanup — diagnostic removed |
-
-### Changes NOT related to H10 (reported separately, as required)
-
-| File | Status | Note |
-|------|--------|------|
-| `AGENTS.md` | M | Windows detach-procedure documentation. Unrelated to H10 and **bundled into the H10 commit** — see Section 24. |
-
-All 13 remaining files are directly required by the H10 mirror architecture or are the
-approved diagnostic cleanup. No unrelated production change was found inside the H10
-feature files.
+**Total H10-specific assertions executed this pass: 98.** With H8 + H9 regressions: **150.**
 
 ---
 
-## 3. PocketBase Subscription Repair
+## 2. H10 scope
 
-### Obsolete API audit
+**In scope for H10:** subscription and membership data moved to PostgreSQL/Prisma, with
+PocketBase kept app-facing and mirrored into PostgreSQL for records created after
+deployment.
 
-Searched all PocketBase hooks for the APIs removed in PocketBase ≥ 0.23.
+**Verified in this pass:**
 
-**H10 subscription hooks — 0 obsolete calls:**
+- Obsolete PocketBase API usage across active subscription hooks.
+- Frontend subscription creation payload contract and validation.
+- Prisma `Subscription` model: fields, identity, relations, enums, indexes.
+- Full mirror chain, including update propagation and idempotency.
+- User identity resolution, no fake users, no duplicate users/subscriptions.
+- Mirror secret authorization, before any database mutation.
+- Subscription lifecycle and multi-subscription membership behaviour.
+- H7/H8/H9 regression without weakening any harness.
+- Final database state and probe cleanup.
+- Prisma migration status, lint, build, health, git state, dead code.
 
-| Hook | `$app.dao()` | `$app.findAllRecords()` |
-|------|--------------|--------------------------|
-| `aaa-mirror-subscription.pb.js` | 0 | 0 |
-| `subscriptions-auto-dates.pb.js` | 0 | 0 |
-| `subscription-approval-auto-update.pb.js` | 0 | 0 |
-| `subscription-auto-update-membership.pb.js` | 0 | 0 |
-| `subscription-payment-completed.pb.js` | 0 | 0 |
-
-They use valid PB 0.38 APIs: `onRecordAfterCreateSuccess`,
-`onRecordAfterUpdateSuccess`, `$app.findRecordById`, `$app.save`.
-
-Obsolete API usage that **does** remain, all in files **outside** the H10 changeset and
-therefore pre-existing:
-
-| File | Obsolete call |
-|------|---------------|
-| `pooja-booking-temple-accounts.pb.js` | `$app.dao()` ×2 |
-| `auto-archive-expired-poojas.pb.js` | `$app.findAllRecords()` |
-| `subscription-auto-downgrade.pb.js` | `$app.findAllRecords()` |
-| `subscription-payment-reminder.pb.js` | `$app.findAllRecords()` |
-| `aaa-donation-temple-accounts.pb.js` | `$app.findFirstRecordByFilter()` |
-| `subscription-receipt-documentation.pb.js` | `$app.findRecordsByFilter()` |
-| `custom-migrations-cmd.pb.js` | `new DynamicModel` |
-
-(`$app.findRecordById` and `$app.settings()` are still valid in PB 0.38 and are **not**
-obsolete.)
-
-### Lifecycle verification — 9/9
-
-| # | Lifecycle check | Result |
-|---|-----------------|--------|
-| 1 | Subscription creation succeeds (no bogus HTTP 400) | PASS |
-| 2 | Record persists in PocketBase | PASS |
-| 3 | Created record status = `pending` | PASS |
-| 4 | Automatic start-date handling (client value overridden with today) | PASS |
-| 5 | Monthly duration → `end_date` = today + 1 month (not the sent 30-day value) | PASS |
-| 6 | Annual duration → `end_date` = start + 12 months (~365 days, NOT 30) | PASS |
-| 7 | Expiry calculation is duration-driven; PB schema rejects `duration_months=0` | PASS |
-| 8 | Pending approval → approval via real route `PUT /admin-payments/:id/approve` → 200, status `active` | PASS |
-| 9 | Rejection → status `rejected`, record retained (not deleted) | PASS |
-
-Live PB select values confirmed to be exactly `pending`, `active`, `rejected`.
-
-The full H10 comprehensive suite (which contains the lifecycle matrix) scored
-**44 passed / 0 failed** in this pass — see Section 6.
+**Explicitly NOT done (per instruction):** H11; any new feature; architectural redesign;
+migration of any other domain; historical PocketBase data migration; any commit; any
+weakening of a verification harness.
 
 ---
 
-## 4. Frontend Contract Verification
+## 3. Files changed
 
-`apps/web/src/components/SubscriptionPaymentModal.jsx`, inspected by source read (no UI
-change made, no behaviour altered).
+H10 is contained in a **single commit, `9b5ed08`** — 14 files, `+618 / -199`. Full
+`git show --name-status`:
 
-Required fields, confirmed present in the create payload (lines 99–116):
+```
+ M  AGENTS.md                                                  (unrelated to H10 — see §20)
+ M  apps/api/prisma/schema.prisma
+ M  apps/api/src/routes/index.js
+ A  apps/api/src/routes/subscriptionMirror.js
+ A  apps/api/src/services/subscriptionMirror.js
+ A  apps/pocketbase/pb_hooks/aaa-mirror-subscription.pb.js
+ D  apps/pocketbase/pb_hooks/diagnostic-subscriptions-analysis.pb.js
+ D  apps/pocketbase/pb_hooks/diagnostic-subscriptions-schema.pb.js
+ M  apps/pocketbase/pb_hooks/subscription-approval-auto-update.pb.js
+ M  apps/pocketbase/pb_hooks/subscription-auto-update-membership.pb.js
+ D  apps/pocketbase/pb_hooks/subscription-diagnostic-query.pb.js
+ M  apps/pocketbase/pb_hooks/subscription-payment-completed.pb.js
+ M  apps/pocketbase/pb_hooks/subscriptions-auto-dates.pb.js
+ M  apps/web/src/components/SubscriptionPaymentModal.jsx
+```
 
-| Required field | Value | Result |
-|----------------|-------|--------|
-| `user_id` | `currentUser.id` | PASS |
-| `duration_months` | `1` when `selectedType === 'Monthly'`, else `12` | PASS |
-| `renewal_type` | `'manual'` | PASS |
+**Confirmed absent from the H10 changeset (checked explicitly):**
 
-The payload is created and sent with
-`pb.collection('subscriptions').create(subscriptionPayload, { $autoCancel: false })` —
-confirming the application-facing flow is **still PocketBase-backed** (Section 24).
-
-Existing validation was **preserved**, not weakened. The H10 diff only *adds* three guards
-(`user_id`, `duration_months`, `renewal_type`) to the existing `missingFields` list; all
-pre-existing guards (`user`, `plan_type`, `status`, `billing_cycle`, `transaction_id`,
-`total_amount`) remain.
-
-Exact H10 diff to this file: **+8 / −0**. No UI, layout, or validation semantics were
-redesigned.
+- `package.json`, `apps/api/package.json`, `apps/web/package.json` — **not touched**.
+  No dependency was added; the mirror reuses the existing `fetch`, `express`,
+  `@prisma/client` and the PocketBase SDK.
+- `apps/api/prisma/migrations/**` — **no migration file added** (correct; see §4/§13).
+- `AGENTS.md` *is* modified but its change is Windows process-management documentation
+  and is unrelated to subscription behaviour.
 
 ---
 
-## 5. Prisma/PostgreSQL Verification
+## 4. Prisma / schema verification
 
-### `Subscription.id` uses the actual PocketBase subscription ID
+`apps/api/prisma/schema.prisma`, `model Subscription` (lines 525–560) verified verbatim:
 
 ```prisma
 model Subscription {
   // H10: id is the ACTUAL PocketBase subscriptions.id (15-char PB key stored in
-  // a VarChar(36) column). There is deliberately no @default(uuid()) here …
+  // a VarChar(36) column). There is deliberately no @default(uuid()) here: the
+  // H9 identity rule forbids a second generated identity, and the mirror is
+  // idempotent precisely because this column is the PB primary key.
   id              String                    @id @db.VarChar(36)
   userId          String                    @db.VarChar(36)
-  …
+  planType        SubscriptionPlanType      @default(premium)
+  amount          Decimal                   @db.Decimal(10, 2)
+  billingCycle    String                    @db.VarChar(100)
+  customDonation  Decimal?                  @db.Decimal(10, 2)
+  totalAmount     Decimal                   @db.Decimal(10, 2)
+  durationMonths  Int
+  renewalType     RenewalType
+  startDate       DateTime
+  endDate         DateTime
+  status          SubscriptionRecordStatus  @default(pending)
+  transactionId   String?                   @db.VarChar(100)
+  transactionRef  String?                   @db.VarChar(100)
+  adminNotes      String?                   @db.Text
+  description     String?                   @db.Text
+  userIdText      String?                   @db.VarChar(100)
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+
+  user                User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  pendingSubscriptions PendingSubscription[]
+
+  @@index([userId]) @@index([status]) @@index([planType]) @@index([endDate]) @@index([userId, status])
+  @@map("subscriptions")
 }
 ```
 
-- **No unintended UUID default.** The H10 diff removes `@default(uuid())` from
-  `Subscription.id` and changes nothing else in the model. Verified live: no
-  second generated identity exists on the PG side.
-- (Other models still carry `@default(uuid())` — pre-existing, out of H10 scope.)
-- Live PG column confirmed `id varchar(36) NOT NULL` (primary key), which holds the
-  15-character PB key.
+| Requirement | Verdict | Evidence |
+|---|---|---|
+| PG `Subscription.id` == PB `subscriptions.id` | **PASS** | `id String @id @db.VarChar(36)`, no generated default |
+| Prisma does not generate a different id | **PASS** | `@default(uuid())` deliberately removed (see diff below) |
+| No unnecessary fields added | **PASS** | every column maps a PB `subscriptions` field or is a mirror timestamp |
+| No required field removed | **PASS** | all pre-existing fields retained; only the `id` default changed |
+| Relations valid | **PASS** | `User` FK non-nullable, `onDelete: Restrict`; `PendingSubscription[]` back-relation present |
+| Enums match application behaviour | **PASS** | `SubscriptionPlanType`, `RenewalType`, `SubscriptionRecordStatus`; unknown PB status degrades safely (assertion 9.3) |
+| Indexes/constraints appropriate | **PASS** | covers user lookup, status scans, plan filters, expiry scans, and the user+status membership query |
 
-### Field coverage vs. the PocketBase contract
+**The entire schema change in H10** (`git diff 9b5ed08^ 9b5ed08 -- apps/api/prisma/schema.prisma`):
 
-All PB contract fields are represented, with no unnecessary fields added:
-
-| PB field | PG column | Type |
-|----------|-----------|------|
-| `id` | `id` | `VarChar(36)` PK |
-| `user` | `userId` (+ `userIdText` = PB `user_id`) | `VarChar(36)` / `VarChar(100)` |
-| `plan_type` | `planType` | enum, default `premium` |
-| `amount` / `total_amount` / `custom_donation` | `amount` / `totalAmount` / `customDonation` | `Decimal(10,2)` |
-| `billing_cycle` | `billingCycle` | `VarChar(100)` |
-| `duration_months` | `durationMonths` | `Int` |
-| `renewal_type` | `renewalType` | enum |
-| `start_date` / `end_date` | `startDate` / `endDate` | `DateTime` |
-| `status` | `status` | enum, default `pending` |
-| `transaction_id` / `transaction_ref` | `transactionId` / `transactionRef` | `VarChar(100)` |
-| `admin_notes` / `description` | `adminNotes` / `description` | `Text` |
-| `created` | `createdAt` | `DateTime` |
-
-Indexes present on `userId`, `status`, `planType`, `endDate`, `[userId, status]`.
-The H10 schema diff is **+5 / −1 lines**, all of it the `id` change plus its comment.
-
-`userId` is `NOT NULL` and the relation is `onDelete: Restrict`, so orphan subscription
-rows are structurally impossible (verified: 0 orphans).
-
----
-
-## 6. PB → API → Prisma → PostgreSQL Mirror
-
-Chain exercised live end to end, no mocking:
-
-```
-PocketBase subscriptions (create/update)
-  → pb hook aaa-mirror-subscription.pb.js  (POST, X-Booking-Mirror-Secret, 4s timeout, ≤2 attempts)
-  → Express POST /internal/subscription-mirror/subscription
-  → requireMirrorSecret (timing-safe compare)
-  → services/subscriptionMirror.js  mirrorSubscription()
-  → prisma.subscription.upsert (where { id })
-  → PostgreSQL vinayagar_dev.public.subscriptions
+```diff
+ model Subscription {
+-  id              String                    @id @default(uuid()) @db.VarChar(36)
++  // H10: id is the ACTUAL PocketBase subscriptions.id ...
++  id              String                    @id @db.VarChar(36)
 ```
 
-**H10 comprehensive suite: 44 passed / 0 failed.** Sections and results:
+`@default(uuid())` is a **client-side** default. Removing it produces **no DDL change**,
+so no new migration is required — confirmed by `migrate status` reporting the database
+up to date against 6 existing migrations (§13).
 
-| Group | Assertions | Result |
-|-------|-----------|--------|
-| 3 — repaired PocketBase flow | 19 | 19 PASS |
-| 5 — PostgreSQL mirror (identity, fields, lifecycle, idempotency) | 11 | 11 PASS |
-| 6 — user membership state | 7 | 7 PASS |
-| 7 — mirror authentication | 5 | 5 PASS |
-| 9 — negative / defensive | 3 | 3 PASS |
+**No historical PocketBase data was migrated.** PostgreSQL contains only records
+mirrored or created after deployment. The verification database contains no migrated
+subscription rows (§17).
 
-Mirror field contract confirmed against live data: plan type, amount, total amount,
-billing cycle, duration months, renewal type, start/end dates, `userIdText`,
-transaction id/ref, optional `customDonation` / `adminNotes` / `description`, status, and
-approval status. Update, approval and rejection transitions all land in PG.
+---
 
-Service log evidence during the run:
+## 5. Subscription lifecycle verification
+
+Independent 12-step lifecycle test (`.h10f-lifecycle.cjs`), executed against live
+PocketBase + API. PocketBase is the entry point for every step, so the real
+`onRecordAfterCreate/UpdateSuccess` hook chain runs.
+
+| # | Step | Result | Evidence |
+|---|---|---|---|
+| 1 | Create subscription | **PASS** | id `vwctzlvye2p4oua` |
+| 2 | Created without the old bogus 400 | **PASS** | HTTP success, record persisted |
+| 2b | Record retrievable from PocketBase | **PASS** | id matches |
+| 3 | Start date normalized | **PASS** | `2026-09-30` (client value overridden) |
+| 4 | Duration → correct end date | **PASS** | `duration_months=3` → `2026-12-30` (= today+3 months), **not** the `+5 day` value sent |
+| 5a | Pending state preserved (PB) | **PASS** | `pending` |
+| 5b | Pending state preserved (PG) | **PASS** | `pending` |
+| 5c | PG id == PB id | **PASS** | `vwctzlvye2p4oua` |
+| 6 | Approve via **real** route `PUT /admin-payments/:id/approve` | **PASS** | HTTP 200 |
+| 6b | PB status → `active` | **PASS** | `active` |
+| 7 | User becomes Premium (PG) | **PASS** | `membershipTier = premium` |
+| 7b | User becomes Premium (PB) | **PASS** | `membership_type = premium` |
+| 8 | `premiumStatus` → `Active` | **PASS** | `Active` |
+| 9 | Reject | **PASS** | PB status `rejected` |
+| 10 | Rejected not left active (PG) | **PASS** | `rejected` |
+| 10b | Rejected-only user demoted | **PASS** | `membershipTier = free` |
+| 11b | Mirror accepts expired-window replay | **PASS** | HTTP 200 |
+| 11c | PG row genuinely expired | **PASS** | `endDate = 2026-08-31` |
+| 12 | No duplicate PG rows | **PASS** | 1 row each for both subscriptions |
+
+**Lifecycle: 20/20 passed, 0 failed, 2 observations.**
+
+### Step 4 — a note on test-fixture rigour
+
+The first run of Step 4 reported a failure. On inspection this was a **defect in my own
+test fixture, not in the product**: the fixture sent `end_date = today + 30 days` with
+`duration_months = 1`, but September has 30 days, so `today+30d` and `today+1 month`
+resolve to the *same* date (`2026-10-30`). The assertion could not distinguish
+normalization from pass-through. The fixture was changed to a discriminating case
+(`duration_months = 3` with a deliberately wrong `today + 5 days`), and Step 4 then
+passed on re-run. No product code was involved.
+
+### Step 11 — expiry: existing behaviour does not demote (OBSERVATION, not a pass)
+
+Two recorded observations:
+
+- **11a** `subscriptions-auto-dates.pb.js` rewrites dates to `today + duration` on
+  create/update. An already-expired subscription is therefore **unreachable through the
+  app flow**; the only way to produce one is a direct mirror replay.
+- **11** With a genuinely expired row forced into PostgreSQL via the mirror
+  (`endDate = 2026-08-31`, `status = active`), the user **remains**
+  `membershipTier = premium`.
+
+**Root cause (pre-existing, out of H10 scope):** `deriveUserState` keys membership on
+`status` alone, and the PocketBase `status` select has no `expired` value. The intended
+PocketBase downgrade cron `subscription-auto-downgrade.pb.js` calls the **removed**
+`$app.findAllRecords()` API, targets mismatched field names, and produces no log output
+— it is not functioning.
+
+This was **verified and reported, not asserted as a pass**, and **no repair was made**,
+because the instruction is to preserve existing behaviour and to repair only
+compatibility problems that prevent existing behaviour from functioning — this is a
+pre-existing product limitation, not an H10 regression. See §20.
+
+---
+
+## 6. Mirror verification
+
+Chain verified end to end: `PocketBase subscriptions → aaa-mirror-subscription.pb.js
+(onRecordAfterCreateSuccess / onRecordAfterUpdateSuccess) → POST
+/internal/subscription-mirror/subscription → requireMirrorSecret →
+mirrorSubscription() → tx.subscription.upsert() → PostgreSQL`.
+
+Route registration and path agreement:
 
 ```
-[SUBSCRIPTION-MIRROR] mirrored subscription <id> -> PG (user=<uuid>, status=pending, end=…)
-[SUBSCRIPTION-MIRROR] ok for <id>
-"POST /internal/subscription-mirror/subscription HTTP/1.1" 200
+apps/api/src/routes/index.js:28   router.use('/internal/subscription-mirror', subscriptionMirrorRouter)
+apps/api/src/routes/subscriptionMirror.js:42   router.post('/subscription', requireMirrorSecret, ...)
+apps/pocketbase/pb_hooks/aaa-mirror-subscription.pb.js:33,114
+                                   var MIRROR_PATH = "/internal/subscription-mirror/subscription";
+```
+
+The hook's `MIRROR_PATH` and the mounted Express route **match exactly**.
+
+### Mirror suite — 44/44 passed, 0 failed
+
+**Section 3 — repaired PocketBase flow (19/19):** create succeeds with no bogus 400;
+record persists; status `pending`; exact frontend field set accepted; monthly
+normalization (`today+1 month`, not the sent 30-day value); start date overridden to
+today; yearly normalization to ~365 days and `start + 12 months`; PB schema itself
+rejects `duration_months = 0`; real approval route → 200; PB status → `active`; PB
+`membership_type = premium`; PB `premium_status = Active`; approval mirrored to PG;
+rejection → `rejected` with the record **retained** in both PB and PG; exactly one PB
+record per create.
+
+**Section 5 — PostgreSQL mirror (11/11):** PB `id` == PG `id`; no second generated
+identity; field contract `planType/amount/totalAmount/billingCycle/durationMonths/
+renewalType`; dates + `userIdText` + `transactionId/Ref`; optional `customDonation/
+adminNotes/description`; user linked via `pocketbaseId`; **update propagation**;
+approval mirrored (`active` + tier `premium`); rejection mirrored; **idempotent retry**
+via direct call → still exactly 1 row; **idempotent retry through the PB hook**
+(3 consecutive updates) → 1 row.
+
+**Section 6 — user membership state (8/8):** case A one active → Premium; A2
+`premiumStatus = Active` with expiry set; case B active + second rejected → **stays
+Premium**; case C the active one becomes rejected → Free; case D demotion clears
+subscription expiry; D2 all subscription rows remain stored (no cascade delete); D3
+rejected rows still queryable with their status.
+
+**Section 9 — negative / defensive (3/3):** unknown PB user → 500 and **no orphan
+row**; subscription without `user` relation → rejected; unknown PB `status` value
+degrades safely (no crash, no duplicate).
+
+### Failure isolation — 9/9 passed
+
+`phase1` (API deliberately **down**), 4/4:
+
+```
+PASS  precondition: API is not serving              -> health=down
+PASS  PB create SUCCEEDED while mirror API unreachable -> id=xn7bh4t5h1s4156
+PASS  record PERSISTED in PocketBase (no false failure) -> status=pending
+PASS  no PG row yet (mirror genuinely unavailable)     -> absent as expected
+```
+
+`phase2` (API back up), 5/5:
+
+```
+PASS  precondition: API healthy again               -> health=200
+PASS  record converged into PG after API recovery   -> id=xn7bh4t5h1s4156
+PASS  converged with correct status                 -> pending
+PASS  converged with correct user link              -> bjm3smm332gozy6
+PASS  exactly one PG row after recovery             -> rows=1
+```
+
+**A mirror failure cannot break the original PocketBase business operation.** The PB
+record commits and returns success while the mirror is unreachable; the failure is
+logged, not thrown.
+
+**Bounded retry:** `maxAttempts = 2` on both create and update, with the failure logged
+after exhaustion. No queueing framework, no unbounded loop.
+
+**Service implementation (verified directly):**
+
+```
+apps/api/src/services/subscriptionMirror.js:220   await tx.subscription.upsert({
+apps/api/src/services/subscriptionMirror.js:221     where: { id: subscriptionId },
+apps/api/src/services/subscriptionMirror.js:118   const byPbId = await userRepo.findByPocketbaseId(...)
+apps/api/src/services/subscriptionMirror.js:163   return { ok: false, error: 'Invalid subscription payload: id is required' }
+apps/api/src/services/subscriptionMirror.js:171   return { ok: false, error: 'subscription-user-missing: no user relation on subscription' }
+apps/api/src/services/subscriptionMirror.js:176   return { ok: false, error: `user_not_resolved: ...` }
+apps/api/src/services/subscriptionMirror.js:147-150  membershipTier / subscriptionStatus / premiumStatus
 ```
 
 ---
 
-## 7. Identity Preservation
+## 7. Security verification
 
-| Check | Result |
-|-------|--------|
-| PB `subscriptions.id` == PG `Subscription.id` (single identity) | PASS |
-| No second generated PG identity (PB id **is** the primary key) | PASS |
-| PG id stores the real 15-char PB key (not a derived/synthetic id) | PASS |
-| User linked through `User.pocketbaseId` → PG `User` | PASS |
-| No duplicate PG user created for one PB user | PASS (0 duplicate `pocketbaseId` values) |
-| No placeholder/guest user ever created | PASS (`subscription.user` is required; unresolvable user → 500 and **no** row) |
-
-User resolution path in `subscriptionMirror.js`: `pocketbaseId` lookup first, then a lazy
-mirror of the PB user record. If the user cannot be resolved the service returns
-`user_not_resolved` and writes nothing — verified by negative test 9.1/9.2 (HTTP 500, no
-orphan row).
-
----
-
-## 8. Idempotency
-
-| Check | Result |
-|-------|--------|
-| Repeated direct mirror call for the same PB subscription → still exactly 1 PG row | PASS |
-| Repeated mirror through the PB hook (3× update) → still exactly 1 PG row | PASS |
-| Expiry-window replay → still exactly 1 PG row | PASS |
-| Convergence after a total mirror outage → exactly 1 PG row (no duplicate from retries) | PASS |
-| Unauthenticated request creates no new row | PASS |
-
-Mechanism: `prisma.subscription.upsert({ where: { id: subscriptionId }, create, update })`
-on the PB primary key, with the PB hook retrying at most twice. The bounded retry
-therefore cannot produce a second row.
-
-**No case of two PostgreSQL rows for one PocketBase subscription was observed in any run.**
-
----
-
-## 9. Mirror Authentication
-
-Header contract confirmed in source (`subscriptionMirror.js:34`):
-`req.get('x-booking-mirror-secret')` compared with `process.env.BOOKING_MIRROR_SECRET`
-using `crypto.timingSafeEqual` behind a length guard. The PB hook sends the same header
-name (`aaa-mirror-subscription.pb.js:79`, `:160`).
-
-| Check | Result |
-|-------|--------|
-| `POST` with **no** `X-Booking-Mirror-Secret` | **401** — PASS |
-| `POST` with a **wrong** secret | **401** — PASS |
-| `POST` with the **correct** secret | **200** — PASS |
-| Payload without `id` → rejected, no row created | PASS |
-| Unauthenticated request creates no subscription row | PASS |
-
-Re-confirmed independently by H8 test `L` (401/401/200) and H9 test `T` (401/401/200).
-
-**No secret value appears in any test output, log excerpt, or this report.** The secret
-was read directly from `apps/api/.env` at run time and never echoed.
-
----
-
-## 10. Mirror Failure Isolation
-
-The API was deliberately stopped to prove a mirror outage cannot fail a valid
-PocketBase operation.
-
-**Phase 1 — API down (4/4 PASS)**
-
-| Check | Result |
-|-------|--------|
-| Precondition: API not serving | PASS (`health=down`) |
-| **PB create SUCCEEDED** while the mirror API was unreachable | PASS |
-| Record **persisted in PocketBase** (no false 400/500) | PASS |
-| No PG row appeared (mirror genuinely unavailable, not silently faked) | PASS |
-
-**Phase 2 — API restored (5/5 PASS)**
-
-| Check | Result |
-|-------|--------|
-| API healthy again | PASS |
-| A normal PB update **converged** the record into PG | PASS |
-| Converged with correct status (`pending`) | PASS |
-| Converged with correct user link | PASS |
-| **Exactly one** PG row after recovery (no duplicate from the retry) | PASS |
-
-**Total: 9/9 PASS.** Normal configuration was restored afterwards and health re-verified.
-
-Additional independent evidence, captured accidentally but directly on point: during one
-window the API was down while the membership suite ran. The PB log shows the hook
-behaving exactly as designed — two bounded attempts per event, failure logged, **and the
-PocketBase record still created successfully**:
+The internal endpoint is protected by the **existing** `X-Booking-Mirror-Secret`
+mechanism (the same one H8/H9 already use — no new scheme introduced).
 
 ```
-[mirror-subscription] attempt 1 errored for vy9m2oxkgxv8xwy: … connection refused
-[mirror-subscription] attempt 2 errored for vy9m2oxkgxv8xwy: … connection refused
-[mirror-subscription] mirror FAILED for vy9m2oxkgxv8xwy after 2 attempts: …
+apps/api/src/routes/subscriptionMirror.js:25   crypto.timingSafeEqual(bufA, bufB)
+apps/api/src/routes/subscriptionMirror.js:32   503 if mirror not configured
+apps/api/src/routes/subscriptionMirror.js:34   const provided = req.get('x-booking-mirror-secret') || ''
+apps/api/src/routes/subscriptionMirror.js:37   401 Unauthorized
+apps/api/src/routes/subscriptionMirror.js:42   router.post('/subscription', requireMirrorSecret, async (req, res) => {
+apps/api/src/routes/subscriptionMirror.js:49     const result = await mirrorSubscription(body);
 ```
 
-The membership assertions failed only because PG was never reached — the PB-side
-operations succeeded. The run was repeated with the API up and scored 17/17.
+**Secret validation occurs before any database mutation** — `requireMirrorSecret` is
+route middleware, and the first database-touching call is `mirrorSubscription(body)` at
+line 49, after the middleware has already returned.
+
+Live results (assertions 7.1–7.5):
+
+| Assertion | Expected | Actual | Result |
+|---|---|---|---|
+| 7.1 no secret header | 401 | 401 | **PASS** |
+| 7.2 wrong secret | 401 | 401 | **PASS** |
+| 7.3 correct secret | 200 | 200 | **PASS** |
+| 7.4 payload without `id` | rejected, no row | rejected, no row | **PASS** |
+| 7.5 unauthenticated call creates no row | 0 rows | 0 rows | **PASS** |
+
+**Authorization: 5/5 PASS.** Independently corroborated by H8 assertion L (no secret
+→ 401, wrong secret → 401, correct secret → 200) and H9 assertion T (same three).
+
+**Secret hygiene:** no secret value appears in this report, in H10 source files, in the
+frontend, or in any log. The value is read at runtime from `apps/api/.env`, which is
+**not tracked by git** (verified). Automated scan of all H10 `.js`/`.jsx`/`.prisma`
+files for a hardcoded `BOOKING_MIRROR_SECRET` literal: **none found**.
 
 ---
 
-## 11. Membership-State Verification
+## 8. Multi-subscription verification
 
-Executed against live PB + PG, cases A–E as specified.
+Explicit A/B regression, executed on a single user holding two independent
+subscriptions. This is the regression called out as important in the verification brief.
 
-| Case | Scenario | Expected | Result |
-|------|----------|----------|--------|
-| A | One active subscription | Premium | PASS — `membershipTier=premium`, `premiumStatus=Active`, `accountType=Premium Membership` |
-| B | Second **rejected** subscription added | active still keeps Premium | PASS — still `premium`; rejected sibling stored as `rejected` |
-| C | Reject the **active** subscription | user becomes Free | PASS — `membershipTier=free`; `subscriptionExpiryDate` cleared to `null` |
-| D | Expired subscription | record existing behaviour | PASS — see observation below |
-| E | Multiple subscriptions independently stored | separate PG rows | PASS — 2 distinct rows, distinct PB ids, same correct PG user, per-row transaction data preserved |
+| # | Check | Result | Evidence |
+|---|---|---|---|
+| 1 | Subscription A approved and active in PB **and** PG | **PASS** | A = `7f1nutctttco0v4` |
+| 2 | Subscription B created later, then rejected | **PASS** | B = `qrqsupoo5bbju66` |
+| 3 | **B rejected does NOT demote the user while A is active** | **PASS** | `membershipTier = premium` |
+| 4 | B stored as `rejected` in PG | **PASS** | `rejected` |
+| 5 | After rejecting A as well, user is downgraded | **PASS** | `membershipTier = free` |
+| 6 | **Both records remain independently stored in PG** | **PASS** | 2 rows |
+| 7 | A and B keep distinct PocketBase identities | **PASS** | `7f1nutctttco0v4`, `qrqsupoo5bbju66` |
+| 8 | Both rows reference the same PG user | **PASS** | same `userId` |
+| 9 | Per-row transaction data preserved | **PASS** | `H10F-MA,H10F-MB` |
 
-**Case D observation (important, pre-existing behaviour):**
-
-Two facts were established empirically:
-
-1. An **expired subscription cannot be produced through the normal PocketBase flow**.
-   `subscriptions-auto-dates.pb.js` rewrites `start_date` to today and `end_date` to
-   today + duration on every create/update, so any subscription created or updated
-   through the app is pushed into the future (verified: hook forced `end_date` to
-   `2026-10-30`).
-2. Case D was therefore driven by replaying the active record into the mirror endpoint
-   with a genuinely past window (60 days ago → 30 days ago). The PG row then carried
-   `end_date = 2026-08-31`, i.e. truly expired, with `status = active`.
-
-**Result: an expired-but-`active` subscription REMAINS premium in PostgreSQL.**
-`deriveUserState()` in `subscriptionMirror.js:142` keys premium purely on
-`status === 'active'`; the PB `status` select has no `expired` value, so nothing demotes
-the user on a date boundary.
-
-This is a **pre-existing gap, not an H10 defect**: the intended expiry mechanism is the
-PocketBase cron `subscription-auto-downgrade.pb.js`, which is outside the H10 changeset.
-That cron calls the removed `$app.findAllRecords()` and targets `membershipTier` /
-`subscriptionEndDate` fields rather than the snake_case fields the H10 hooks write, and
-it produces **no log output at all** in the current PB log — i.e. it is not functioning.
-H10 faithfully mirrors the authoritative PocketBase state; it does not invent a
-demotion policy. See Section 24.
-
-Also verified in the comprehensive suite: demotion clears the expiry date, and rejected
-rows are retained and still queryable (no cascade delete invented).
+**Multi-subscription: 8/8 passed.** No cascade delete, no demotion from a rejected
+sibling while another subscription is active.
 
 ---
 
-## 12. Multi-Subscription Verification
+## 9. User identity verification
 
-| Assertion | Result |
-|-----------|--------|
-| Multiple subscriptions for one user are stored as separate PG rows | PASS |
-| Each row keeps its own distinct PB identity | PASS |
-| All rows reference the same correct PG user | PASS |
-| Per-row transaction data preserved independently | PASS |
-| Any `active` subscription wins over `pending`/`rejected` when deriving membership | PASS |
-| A rejected or pending sibling can never demote a user with a separate active plan | PASS |
+`PocketBase user ↔ PostgreSQL User.pocketbaseId`
 
-Implementation: `subscriptionMirror.js:230-243` re-reads **all** of the user's
-subscriptions inside the same transaction, ranks them `active` (0) → `pending` (1) →
-`rejected` (2), and derives membership from the winner.
+| Check | Result | Evidence |
+|---|---|---|
+| Mirror resolves the user by `pocketbaseId` | **PASS** | `subscriptionMirror.js:118` `userRepo.findByPocketbaseId` |
+| Lazy user mirror from PB preserved (H5/H7/H8 strategy) | **PASS** | resolution order documented at `subscriptionMirror.js:106` |
+| **No fake users invented** | **PASS** | unresolvable user → `user_not_resolved` error, **no row created** (assertion 9.1) |
+| Subscription without `user` relation rejected | **PASS** | `subscription-user-missing` (assertion 9.2) |
+| **No duplicate PG users** | **PASS** | duplicate `pocketbaseId` query returned 0 groups |
+| Multi-subscription rows share one PG user | **PASS** | both A and B reference the same `userId` |
+| Orphan prevention is structural | **PASS** | `userId String` is **non-nullable**; FK is `onDelete: Restrict` |
 
-Combined H10 core + multi-subscription equivalence check: the reported **28/28** claim
-(22 core + 6 multi-subscription) is independently confirmed. This pass additionally ran
-the standalone 44-assertion comprehensive suite and the 17-assertion A–E membership
-suite, both clean.
+Referential integrity was checked with a real join, not a null-filter:
 
----
-
-## 13. H7 Regression
-
-Verified via H8 test **O** (the H7 harness has no separate entry point). Unmodified
-harness.
-
-| Check | Result |
-|-------|--------|
-| Real PB pooja-booking create | PASS (as a *documented pre-existing block*): create error `Failed to create record.`, `persisted=0` — the pre-commit failure signature, unchanged by H10 |
-| Direct booking mirror (pooja pre-provided in PG) → PG booking + temple account | PASS (200, `booking=true`) |
-
-**No H7 regression.** Root cause of the pre-existing block is documented and is **not** in
-the H10 changeset: `pooja-booking-temple-accounts.pb.js` still calls the removed
-`$app.dao()`.
-
----
-
-## 14. H8 Regression
-
-Harness `apps/api/.h8-e2e.cjs`, SHA256 verified byte-identical to baseline before and
-after the run.
-
-```
-===== H8 E2E SUMMARY =====
-PASS: 20/20
+```sql
+SELECT s.id FROM subscriptions s LEFT JOIN users u ON u.id = s."userId" WHERE u.id IS NULL
+-- 0 rows
 ```
 
-Exit code 0. Coverage included: donation create/approve/reject/retry/receipt, the
-`ta_<donationId>` ID scheme, payment mirror + subscription temple account, payment
-approve/reject, retry idempotency, mirror auth 401/401/200, `GET /auth/me`, `GET /users`
-role authorization, and H5 role dual-write.
+**Note on a corrected check:** an earlier cleanup script of mine filtered
+`userId: null`, which Prisma rejected — correctly, because the column is non-nullable.
+The harness was wrong, not the schema; it was replaced with the join above plus an
+explicit schema assertion.
 
-**No H8 regression.**
-
----
-
-## 15. H9 Regression
-
-Harness `apps/api/.h9-e2e.cjs`, SHA256 verified byte-identical to baseline before and
-after the run.
-
-```
-===== H9 E2E SUMMARY =====
-PASS: 32/32
-```
-
-Exit code 0. Coverage included: expense category / classification / expense / voucher /
-temple-account create+update through the PB hook, the `ta_EXP-<expenseId>` scheme, retry
-idempotency, lazy category mirror, FK safety (500), `SetNull` behaviour, negative-amount
-rejection, mirror auth 401/401/200, full field mapping, split amounts and
-subscription-type mapping, real PB delete propagation for every collection, and
-"no invented cascade".
-
-**No H9 regression.**
+**User identity: PASS.**
 
 ---
 
-## 16. Prisma Verification
+## 10. H7 regression
 
-Run in this pass, with the API stopped so the query-engine DLL was genuinely released.
+H7 (Pooja booking) coverage is executed through the H8 harness, test **O**, which is
+where H7 lives. The harness was **not modified or weakened** — verified by SHA-256
+before and after (§18, §19).
 
-| Command | Exit | Output |
-|---------|------|--------|
+```
+PASS | O. H7: real pooja booking create -> documented pre-existing block
+     | create error="Failed to create record."; persisted=0 (0 = pre-existing legacy hook aborts booking create)
+PASS | O. H7: booking mirror direct (pooja pre-provided in PG) -> PG booking + TA | api=200 booking=true
+```
+
+**H7 regression: PASS.**
+
+- The H7 **booking mirror** works (`api=200`, PG booking + TempleAccount created).
+- The H7 **real PocketBase booking create** remains blocked by a **pre-existing** legacy
+  hook, documented in the H7 report (§13/§14/§16: PB 0.38 JSVM scope bug, poojas read
+  400, 400-but-committed, temple-account hook errors). Root cause is
+  `pooja-booking-temple-accounts.pb.js`, which still uses the removed
+  `$app.dao()` API. **This file is not part of the H10 changeset** and was deliberately
+  left alone (unrelated cleanup is out of scope).
+
+**H10 introduced no new H7 breakage**: the pre-existing failure signature is identical to
+the one recorded in `H7_BUILD_FINAL_REPORT.md`.
+
+---
+
+## 11. H8 regression
+
+`.h8-e2e.cjs` executed unmodified. **Result: PASS — 20/20.**
+
+Coverage confirming H10 did not break the donation/payment mirrors:
+
+| Area | Assertions | Result |
+|---|---|---|
+| Donation create via PB hook → PG | A | **PASS** |
+| Donation approve → PG approved + TempleAccount (`ta_<donationId>`, PG id == PB id) | B | **PASS** |
+| Donation mirror retry idempotent | C | **PASS** (1 donation, 1 TA) |
+| Donation reject → PG rejected, no TA | D | **PASS** |
+| Donation receipt fields mirror | E | **PASS** |
+| Payment mirror direct → PG mapped | F | **PASS** |
+| Payment approved → PG approved + Subscription TA | G | **PASS** |
+| Payment rejected → PG rejected, no TA | H | **PASS** |
+| Payment retry idempotent | I | **PASS** (1 payment, 1 TA) |
+| TempleAccount shape (donation + payment) | K | **PASS** |
+| Mirror auth 401/401/200 | L | **PASS** |
+| H4 `/auth/me`, `/users`, non-admin 403 | M ×3 | **PASS** |
+| H5 `PUT /users/:id/role` dual-write (PG + PB) | N | **PASS** |
+| Real payments create — documented pre-existing block | P0 | **PASS** (assertion expected) |
+| H7 booking mirror | O | **PASS** |
+
+Notable: the `ta_<donationId>` ID scheme and the H4/H5 user dual-write behaviour are
+intact, and the documented pre-existing payment-create block still asserts exactly as
+written.
+
+---
+
+## 12. H9 regression
+
+`.h9-e2e.cjs` executed unmodified. **Result: PASS — 32/32.**
+
+Confirms H10 did not break the expense-ledger mirrors, TempleAccount identity, or delete
+propagation:
+
+| Area | Assertions | Result |
+|---|---|---|
+| ExpenseCategory create / update / idempotent | A, B, K | **PASS** |
+| Classification create / update / idempotent | C, D, L | **PASS** |
+| Expense create / update / idempotent | E, F, M | **PASS** |
+| Voucher create / update / idempotent | G, H, N | **PASS** |
+| TempleAccount create (`ta_EXP-<id>`) / update / idempotent | I, J, O | **PASS** |
+| Lazy category mirror | P | **PASS** |
+| Expense without category → 500 (FK safety) | Q | **PASS** |
+| Voucher unresolvable expense → `expenseId = null` (SetNull) | R | **PASS** |
+| Negative expense amount rejected | S | **PASS** |
+| Mirror auth 401/401/200 | T | **PASS** |
+| Full field mapping (class / voucherId / desc / billFile) | U | **PASS** |
+| TempleAccount split amounts + subscriptionType mapping | V | **PASS** |
+| `ta_EXP-<id>` scheme intact; donation TAs still `ta_<donationId>` | W | **PASS** |
+| Delete propagation: TA, category, classification, expense + EXP TA, voucher — each idempotent | X, X2, X3, X4, X6 | **PASS** |
+| No invented cascade: expense delete alone leaves orphan PB TA | X5 | **PASS** |
+| Missing payload → 400 | Y | **PASS** |
+
+H10's `Subscription` model and mirror coexist with the H9 ledger without collision;
+`PendingSubscription[]` and the H9 `Subscription`-classified TempleAccounts both resolve.
+
+---
+
+## 13. Prisma validation / migration status
+
+All three commands run from `apps/api` (the `.env` holding `DATABASE_URL` lives there).
+Services were stopped first, because a running API holds a lock on the Prisma query
+engine (`EPERM ... rename query_engine-windows.dll.node`), which is a known Windows
+file-lock, not a schema problem.
+
+| Command | Exit | Actual output |
+|---|---|---|
 | `npx prisma validate` | **0** | `The schema at prisma\schema.prisma is valid` |
-| `npx prisma migrate status` | **0** | `6 migrations found in prisma/migrations` · `Database schema is up to date!` |
-| `npx prisma generate` | **0** | `Generated Prisma Client (v6.19.3) … in 680ms` |
+| `npx prisma migrate status` | **0** | `Datasource "db": PostgreSQL database "vinayagar_dev", schema "public" at "localhost:5432"` · `6 migrations found in prisma/migrations` · **`Database schema is up to date!`** |
+| `npx prisma generate` | **0** | `Generated Prisma Client (v6.19.3) to ..\..\node_modules\@prisma\client in 428ms` |
 
-**Schema is up to date — no drift, no pending migration.**
+**No migration was created**, and none was needed: the only schema change was removing
+the client-side `@default(uuid())` from `Subscription.id`, which emits no DDL. The
+database is confirmed in sync with the 6 existing migrations.
 
-On Windows, `prisma generate` initially failed with
-`EPERM: operation not permitted, rename query_engine-windows.dll.node…`. This was handled
-exactly as prescribed and **the schema was not modified to work around it**: the API
-process was stopped, `prisma generate` was re-run and succeeded, and the API was restarted
-with `PB_SUPERUSER_EMAIL` / `PB_SUPERUSER_PASSWORD` and health-checked (200).
+Existing migration files (all pre-H10, unchanged by H10):
 
-No migration was invented for the `id` change because the live PG column already matched
-(`varchar(36) NOT NULL` primary key).
-
----
-
-## 17. Lint Verification
-
-| Command | Exit | Result |
-|---------|------|--------|
-| `npm run lint` (root, web + api concurrently) | **0** | PASS — no errors, no warnings, no diagnostics |
-| `npm run lint --prefix apps/api` | **0** | PASS |
-| `npm run lint --prefix apps/web` | **0** | PASS |
-
-Note: the temporary H10 verification harnesses initially produced 64 `no-undef` /
-`no-empty` errors because the API ESLint config scopes `globals.node` to `**/*.js` only,
-so `.cjs` files receive no Node globals (the H8/H9 harnesses declare
-`/* global process, console, setTimeout, fetch */` for this reason). Following the
-existing precedent, the temporary harnesses were kept outside the repository instead of
-editing shared ESLint configuration. **No product code and no shared config was altered to
-achieve a clean lint.**
+```
+20260718145652_initial_schema
+20260811054601_pooja_domain_phase1
+20260908075233_phase0_checks_and_contact_status
+20260908163241_h3_users_auth_contract
+20260911111820_h8_donation_mirror
+20260922120000_h9_expense_ledger
+```
 
 ---
 
-## 18. Build Verification
+## 14. Lint result
 
-| Command | Exit | Result |
-|---------|------|--------|
-| `npm run build` (root) | **0** | PASS |
-| `npx vite build --outDir ../../dist/apps/web` (direct, visible output) | **0** | `vite v7.3.1` · `3241 modules transformed` · `✓ built in 46.44s` |
+| Command | Exit |
+|---|---|
+| `npm run lint` (root, `concurrently` web + api) | **0** |
+| `npm run lint --prefix apps/api` | **0** |
+| `npm run lint --prefix apps/web` | **0** |
 
-Artifacts verified freshly written: `dist/apps/web/index.html` and `assets/` at the build
-timestamp, **314** files in `assets/`.
-
-Operational note: the root `npm run build` (which routes through `concurrently --raw`)
-does not flush the child process output to a redirected log, so it can appear to produce
-no build output. Running Vite directly confirmed the build genuinely succeeds and rewrites
-`dist/`. This is an output-buffering artifact, not a build failure. The frontend dev
-server (port 3000) was **not** started — it is not required for a production build.
+No errors and no warnings. **No unrelated code was modified to silence anything** — the
+H10 changeset introduces no lint suppressions.
 
 ---
 
-## 19. Health Checks
+## 15. Build result
 
-Final sample, taken with PocketBase started with `PB_SUPERUSER_*`,
-`BOOKING_MIRROR_SECRET` and `BOOKING_MIRROR_API_URL` in its process environment, and the
-API started with `PB_SUPERUSER_EMAIL` / `PB_SUPERUSER_PASSWORD`:
+| Command | Exit | Evidence |
+|---|---|---|
+| `npm run build` (root) | **0** | runs `vite build --outDir ../../dist/apps/web` |
+| `npx vite build` (direct) | **0** | `vite v7.3.1` · `3241 modules transformed.` · `built in 35.27s` |
 
-| Endpoint | Expected | Actual | Result |
-|----------|----------|--------|--------|
-| `http://localhost:8090/api/health` | 200 | **200** | PASS |
-| `http://localhost:8090/` (admin UI) | 200 | **200** | PASS |
-| `http://localhost:3001/health` | 200 | **200** | PASS |
-| `http://localhost:3000/` (web dev) | not required | 000 (not started) | N/A |
+`dist/apps/web` contains **318** asset files. Build completes successfully; no unrelated
+code was changed to silence warnings.
 
 ---
 
-## 20. Probe Cleanup
+## 16. Health-check result
 
-Only records created by this verification were deleted. Seed/reference data, admin users
-and unrelated H7/H8/H9 data were left intact.
+PocketBase was started **first**, then the API, with `PB_SUPERUSER_EMAIL` /
+`PB_SUPERUSER_PASSWORD` injected as process-level environment variables (required for
+the API's admin bootstrap) and `BOOKING_MIRROR_SECRET` / `BOOKING_MIRROR_API_URL`
+injected into PocketBase (required for the mirror hooks). Bounded polling, every probe
+carried a hard `--max-time`.
 
-| Check | Result |
-|-------|--------|
-| No H10 probe users in PG `users` | PASS (0) |
-| No H10 probe rows in PG `subscriptions` | PASS (0) |
-| No H10 probe `transactionId` in PG `subscriptions` | PASS (0) |
-| No orphaned PG subscriptions | PASS (0) |
-| No duplicate `pocketbaseId` in PG `users` | PASS (0) |
-| No H10 probe users left in PocketBase | PASS (0) |
+```
+[boot] PocketBase /api/health = 200 (attempt 1)
+[boot] API        /health     = 200 (attempt 1)
 
-One residual PocketBase probe record set (`h10.app2@vinayagar.local` plus one
-subscription) was found from an earlier H10 run and was removed explicitly. All
-verification scripts were written to a temp directory and deleted from the repository;
-a recursive scan confirms **no stray `.h10*` file** remains outside `node_modules`.
+PocketBase  http://localhost:8090/api/health -> 200 (curl exit 0)
+API         http://localhost:3001/health     -> 200 (curl exit 0)
+captured PIDs: 6780,17244
+```
+
+**Health: PASS.** Both services reported HTTP 200 in the same invocation in which they
+were started.
+
+**Hard stop (required):** every captured PID was terminated, then verified:
+
+```
+port 8090 LISTEN holders: none
+port 3001 LISTEN holders: none
+pocketbase.exe processes remaining: 0
+API (node src/main.js) processes remaining: 0
+post-stop probe 8090=000  3001=000  (000 = correctly down)
+HARD-STOP CLEAN: all verification servers stopped, all ports released
+```
+
+No background server was left running.
+
+**Environment caveat:** this sandbox intermittently reaps detached processes *between*
+tool invocations — observed repeatedly (clean logs, no crash stacks, ports simply
+released). It is an environment artifact, not an application defect. Every functional
+result above was therefore captured inside a single invocation that started the service,
+waited for health, and ran the assertions. Two early failures caused by this (a
+`"Something went wrong."` from an already-stopped PocketBase, and a non-zero
+`migrate status` caused by a missing `DATABASE_URL` when run from the repo root) were
+diagnosed as such and re-run correctly; neither was a product failure.
 
 ---
 
-## 21. Final PostgreSQL Counts
+## 17. Final PostgreSQL counts
 
-Database: `vinayagar_dev`, schema `public` (35 tables total).
+Queried directly via Prisma against `vinayagar_dev`, public schema (35 tables):
 
-| Table | Count |
-|-------|-------|
+| Table | Rows |
+|---|---|
 | `users` | 7 |
 | `subscriptions` | **0** |
 | `donations` | 0 |
@@ -567,230 +615,223 @@ Database: `vinayagar_dev`, schema `public` (35 tables total).
 | `expenses` | 0 |
 | `vouchers` | 0 |
 
-Provenance of the non-zero rows (all pre-existing / seed / H8-H9 residue — **not** H10
-probes, and therefore deliberately retained):
-
-- `users` (7): 5 admins and 2 users — `admin@demo.com`, `apuurnan@gmail.com`,
-  `demo123@gmail.com`, `geeemmtechnology@gmail.com`, `newadmin@tempelvereein.de`,
-  `palaniakash1@gmail.com`, `testpalani@gmail.com`.
-- `temple_accounts` (4): pre-existing entries with transaction ids
-  `niizqz91f13evcg`, `6sb0k5f9c02qxrn`, `ae5iukjgfkb7k3c`, `pvfar0nqv3lt7cx`.
-- `expense_categories` (8): `Annadhanam`, `General Fund`, `Goshala`, `Other`,
-  `Pooja Services`, `Temple Maintenance`, `Veda Pathshala`, plus `H9-PROBE-CAT` residue
-  from the H9 harness.
-- `classifications` (5): `Donation`, `Expense`, `Pooja Booking`, `Refund`, `Subscription`.
-
 PocketBase totals retained: **18 users, 0 subscriptions**.
 
-> ### No historical PocketBase data migration was performed
->
-> The database was intentionally started fresh. **No historical PocketBase data was
-> imported into PostgreSQL.** H10 is a runtime mirror only: a PostgreSQL row is created
-> exclusively when a PocketBase subscription record is created or updated *after* the
-> mirror hook is deployed. This is by design and is stated explicitly in
-> `subscriptionMirror.js`: *"No historical data migration: only new runtime records pushed
-> by the PB hooks land in PG."* The `subscriptions` count of 0 after cleanup is the
-> expected and correct outcome.
+`subscriptions = 0` confirms the mirror is runtime-only: every subscription created
+during verification was removed by its own probe cleanup. **No historical PocketBase
+subscription data was migrated**, exactly as required.
+
+Non-zero rows are pre-existing seed/admin data and H8/H9 harness residue, deliberately
+retained (e.g. the 4 `temple_accounts` are H8 donation/payment mirror records; the 8
+`expense_categories` include seed categories plus `H9-PROBE-CAT`). **No unrelated
+existing data was deleted.**
 
 ---
 
-## 22. Protected-Area Verification
+## 18. Cleanup result
 
-| Area | Expectation | Result |
-|------|-------------|--------|
-| `apps/api/.h8-e2e.cjs` | SHA256 `20CF4D64…5BE26` | **MATCH** (verified before and after) |
-| `apps/api/.h9-e2e.cjs` | SHA256 `E02B703…3CDC` | **MATCH** (verified before and after) |
-| `apps/api/src/routes/admin-payments.js` | untouched | **unchanged** |
-| `apps/api/src/routes/admin-subscriptions.js` | untouched | **unchanged** |
-| `apps/web/src/lib/pocketbaseClient.js` | untouched | **unchanged** |
-| `apps/api/src/utils/pocketbaseClient.js` | untouched | **unchanged** |
+Dedicated cleanup verification: **11 passed, 0 failed.**
 
-No unexpected modification of any protected file. No verification harness expectation was
-weakened, relaxed or rewritten in this pass; the only harness changes were to the
-**newly created temporary H10 scripts**, which are not part of the committed set and were
-removed afterwards.
+| Check | Result | Evidence |
+|---|---|---|
+| No PB user left for probe `h10.v.fail@…` | **PASS** | 0 found |
+| No PB user left for probe `h10.v.smoke@…` | **PASS** | 0 found |
+| No H10 probe subscription anywhere in PB | **PASS** | 0 found |
+| PB probe user total | **PASS** | 0 |
+| No PG user left for probe `h10.v.fail@…` | **PASS** | 0 found |
+| No PG user left for probe `h10.v.smoke@…` | **PASS** | 0 found |
+| No PG user with `h10` in email | **PASS** | 0 found |
+| No PG subscription with `H10V` transaction | **PASS** | 0 found |
+| `Subscription.userId` non-nullable (blocks orphans structurally) | **PASS** | `userId String @db.VarChar(36)` |
+| No PG subscription pointing at a missing user | **PASS** | 0 found |
+| No duplicate `pocketbaseId` in PG users | **PASS** | 0 dupes |
+
+Additional counts/cleanup script: **6 passed, 0 failed** — no H10 probe users in PG, no
+H10 probe rows in PG subscriptions, no H10 `transactionId` in PG subscriptions, no
+orphaned PG subscriptions, no duplicate `pocketbaseId`, and PB totals confirmed (18 users,
+0 subscriptions). 5 admin users retained by design.
+
+**Only records created by H10 verification probes were removed.** No unrelated data was
+touched.
+
+**Harness note (not a product issue):** the counts script printed all results and
+`6 passed, 0 failed`, then aborted during Node teardown with
+`Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c, line 76`
+(a known Node/libuv Windows shutdown assertion). All assertions had already completed
+and passed. Similarly, the failure-isolation script removes its own state file
+`apps/api/.h10-fail-state.json` on success — confirmed absent.
 
 ---
 
-## 23. Final Git Status
+## 19. Git diff summary
+
+**State during this verification:**
 
 ```
 $ git status --short
-A  H10_POST_BUILD_VERIFICATION_REPORT.md
+(empty)
+
+$ git status --porcelain
+(empty)
+
+$ git diff --stat HEAD
+(no unstaged/staged changes to tracked files)
+
+$ git ls-files --others --exclude-standard
+none
+
+$ git log --oneline -1 --decorate
+18c14d3 (HEAD -> main, origin/main, origin/HEAD) docs(report): add H10 post-build verification report
 ```
 
-H10 diff summary versus `HEAD` (`9b5ed08`):
+**Important history correction.** At the start of this pass HEAD was `9b5ed08` with the
+report staged but uncommitted. During the pass, the repository owner
+(`rganesh2100 <rganesh2100@gmail.com>`, 2026-09-30 16:59:03 +0530) committed it:
 
 ```
- H10_POST_BUILD_VERIFICATION_REPORT.md | 460 ++++++++++++++++++++++++++++++++++
- 1 file changed, 460 insertions(+)
+18c14d3  docs(report): add H10 post-build verification report for subscription/membership mirror
+parent:  9b5ed08
+files :  H10_POST_BUILD_VERIFICATION_REPORT.md | 796 ++++++++++++++++++++++++
 ```
 
-- **No tracked product file was modified** by this verification.
-- **No commit was made.** `HEAD` is still `9b5ed08` and `main` is still in sync with
-  `origin/main`.
-- No `git reset` and no discarding of unrelated user work.
-- The only change in the tree is this report. It is currently **staged in the index**
-  (`A `); the verification did not run `git add`, so be aware that a future
-  `git commit` would include it.
+This commit was **not made by this verification** — no `git commit` was run at any point.
+Its parent is exactly `9b5ed08`, so the H10 implementation is intact and linear. The
+only tracked-tree change is this report file, which is now tracked and carries this
+pass's uncommitted revision.
+
+| Requirement | Verdict | Evidence |
+|---|---|---|
+| Only intended H10 files changed | **PASS** | 14 files in `9b5ed08`; 1 report file in `18c14d3` |
+| No generated junk | **PASS** | `dist/` gitignored; no untracked files |
+| No secrets | **PASS** | no hardcoded secret; `apps/api/.env` not tracked |
+| No temporary probe files | **PASS** | all harnesses live in `%TEMP%`, none in the repo |
+| No accidental migration files | **PASS** | none in the H10 diff |
+| No weakened tests | **PASS** | protected harness hashes unchanged (§20) |
+| No commit by this verification | **PASS** | tree left clean/unchanged apart from the report |
+
+**On-disk files matching a junk-name pattern:** `apps/api/.h9-api.log` and
+`apps/api/.h9-pb.log`. Both are **gitignored** via `.gitignore:26 (*.log)`, predate H10,
+and are H9 leftovers — not git pollution and not removed (unrelated cleanup is out of
+scope).
 
 ---
 
-## 24. Known Limitations / Remaining PocketBase Dependencies
+## 20. Known remaining limitations
 
-### 24.1 PocketBase is NOT removed — H10 is a mirror phase
+All items below are **pre-existing and outside the H10 changeset**. None was introduced
+or worsened by H10, and none blocks the GO decision.
 
-**Current reality (unchanged by H10):**
+1. **Expiry does not demote Premium (behavioural gap, verified not asserted).**
+   `deriveUserState` keys membership on `status` alone; the PB `status` select has no
+   `expired` value; `subscriptions-auto-dates.pb.js` rewrites dates to
+   `today + duration`, making an expired subscription unreachable via the app flow; and
+   the intended downgrade cron `subscription-auto-downgrade.pb.js` calls the removed
+   `$app.findAllRecords()`, targets mismatched field names, and emits no log output.
+   *Recommended future fix (not H10 scope):* make membership status derive from
+   `status` **and** `endDate`, and repair the cron to PB 0.38 APIs.
 
-```
-Frontend  →  PocketBase (application-facing store)
-              │  subscriptions created/updated here
-              ▼
-         pb hook ──POST──▶  Express internal endpoint  →  Prisma  →  PostgreSQL
-```
+2. **Obsolete PB APIs outside H10.** Zero `$app.dao()` in all 16 active subscription
+   hooks. Remaining removed-API usage, all pre-existing and not in the H10 changeset:
+   - `$app.dao()` → `pooja-booking-temple-accounts.pb.js` (root cause of the H7
+     real-booking-create block)
+   - `$app.findAllRecords()` → `subscription-auto-downgrade.pb.js`,
+     `subscription-payment-reminder.pb.js`
+   - `$app.findRecordByFilter`-family calls → `subscription-receipt-documentation.pb.js`
+     and several others
 
-`SubscriptionPaymentModal.jsx:136` still calls
-`pb.collection('subscriptions').create(...)`, and admin approval still runs through the
-PocketBase-backed route `PUT /admin-payments/:id/approve`. PocketBase remains the
-authoritative, application-facing subscription system. PostgreSQL holds a mirrored copy.
+3. **`admin-payments.js` bare-subscription branch returns 500.** `PUT
+   /admin-payments/:id/approve` with a bare `subscriptions` id writes unsupported
+   `status: 'approved'`. Introduced by `3b3a9bf`, pre-existing. The real
+   `pending_subscriptions` approval path returns **200** and is verified working
+   (lifecycle Step 6).
 
-**Future target (explicitly NOT performed in H10):**
+4. **Dead branch in `subscription-payment-completed.pb.js`.** An `Approved` status branch
+   remains but is inert (unreachable under the current flow). Harmless; left in place
+   to avoid unnecessary redesign.
 
-```
-Frontend  →  Express API  →  Prisma  →  PostgreSQL
-```
+5. **Commit-message mismatch.** `9b5ed08` is titled
+   *"docs(agents): replace Start-Process with WMI for detaching daemons"* yet carries the
+   entire H10 feature. Flagged for transparency; **not** amended (no commits, no history
+   rewriting).
 
-The final cutover is out of H10 scope and was not attempted.
+6. **`AGENTS.md` unrelated change bundled into `9b5ed08`.** Windows process-management
+   docs; no behavioural impact.
 
-### 24.2 Pre-existing failure — `admin-payments.js` bare-subscription branch
+7. **`AGENTS.md` claims "No README exists", but a root `README.md` does exist**, and its
+   generated hook listing is **stale** — it still lists
+   `diagnostic-subscriptions-analysis.pb.js`, `diagnostic-subscriptions-schema.pb.js`
+   and `subscription-diagnostic-query.pb.js`, which H10 deleted. Documentation only; no
+   code impact. The only references to those deleted hooks anywhere are this report and
+   `README.md` — **no active code references them** (verified).
 
-`PUT /admin-payments/:id/approve` with a **bare PocketBase subscription id** returns
-**HTTP 500** (API logs `Failed to update record.` with a PB `ClientResponseError 400`),
-because that branch writes `status: 'approved'` while the `subscriptions.status` select
-only permits `pending` / `active` / `rejected`. Introduced in commit `3b3a9bf` — pre-existing,
-not H10.
+8. **Pre-existing diagnostic hooks intentionally retained:** `debug-subscription-creation.pb.js`,
+   `diagnostic-payments-schema.pb.js`, `diagnostic-queries.pb.js` are tracked from
+   `initial commit` / `3b3a9bf`, are **not** H10 artifacts, and were left untouched per
+   the "no unrelated cleanup" instruction. H10's own three diagnostic hooks
+   (`diagnostic-subscriptions-analysis`, `diagnostic-subscriptions-schema`,
+   `subscription-diagnostic-query`) are confirmed **deleted from disk**.
 
-**Not blocking:** the real production path approves a `pending_subscriptions` record and
-returns 200, yielding PB `active`, PG `active`, and the user `premium` / `Active` /
-`Premium Member` (verified live). The file is protected and was deliberately not modified.
+9. **Sandbox process instability.** Detached PocketBase/API processes are intermittently
+   reaped between shell invocations. Environment artifact; all results were captured
+   with service start, health wait and assertions in a single invocation.
 
-### 24.3 Expiry does not demote premium (pre-existing)
+10. **No historical data migration.** By design. PG holds only newly mirrored/created
+    records; any pre-existing PocketBase subscriptions predating H10 are not present in
+    PostgreSQL and will only appear if touched after deployment.
 
-An expired-but-`active` subscription still yields premium, because the mirror derives
-membership from `status` alone and the PB `status` select has no `expired` value
-(Section 11). The intended mechanism — the PB cron `subscription-auto-downgrade.pb.js` —
-is outside the H10 changeset, calls the removed `$app.findAllRecords()`, targets
-`membershipTier` / `subscriptionEndDate` rather than the snake_case fields H10 writes, and
-emits no log output at all, i.e. it is not functioning. Compounding this, the
-`subscriptions-auto-dates` hook rewrites dates to today + duration on every write, so an
-expired subscription is unreachable through the application flow in the first place.
+**Protected-area integrity (SHA-256, verified before and after all runs):**
 
-This is a **remaining PocketBase dependency** and the most substantive functional gap
-found. It is pre-existing and out of H10 scope; it should be addressed when the
-subscription domain is cut over to the API.
+| File | SHA-256 | Status |
+|---|---|---|
+| `apps/api/.h8-e2e.cjs` | `20CF4D640A118972FC4D9D299F196480B8FB458ADF087B43F821A25ACF55BE26` | unchanged |
+| `apps/api/.h9-e2e.cjs` | `E02B7038362695880E9AB0F7A18136AACF26B66C1A3255A2E9CB969A6F293CDC` | unchanged — matches the baseline recorded in `H9_POST_BUILD_VERIFICATION_REPORT.md` line 56 |
 
-### 24.4 Obsolete PocketBase 0.38 APIs still present outside H10
-
-Seven pre-existing hooks still call removed APIs (listed in Section 3). The one with
-user-visible impact is `pooja-booking-temple-accounts.pb.js` (`$app.dao()`), which is the
-root cause of the documented H7 real-booking-create block. None are part of the H10
-changeset.
-
-### 24.5 Sandbox daemon instability (environmental, not an application defect)
-
-The detached PocketBase and API processes were repeatedly reaped by the host **between**
-shell invocations. Evidence that this is environmental:
-
-- The API log ends cleanly on a successful `200` mirror response, with no error,
-  exception, `EADDRINUSE` or crash stack; one instance ended with `^C` (external
-  `SIGINT`), another simply stopped.
-- The PocketBase log ends cleanly at a routine auto-archive cron tick.
-- Whenever a process was alive, every request it served succeeded.
-- Immediately after each restart, health and the mirror smoke tests passed.
-
-Impact on the verdict: **none** — every functional gate was executed against live
-services. Operationally, daemons must be (re)started and probed within a single
-invocation, and the API requires process-level `PB_SUPERUSER_EMAIL` /
-`PB_SUPERUSER_PASSWORD`, which are **not** present in `apps/api/.env`.
-
-A related cosmetic artifact: the PocketBase Node SDK emitted
-`Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` on process teardown *after* all
-assertions had printed. It affects only the exit code of the counting script, never the
-assertion results.
-
-### 24.6 Commit hygiene (no action taken)
-
-Commit `9b5ed08` is titled `docs(agents): replace Start-Process with WMI for detaching
-daemons`, yet it carries the **entire H10 feature** (13 of its 14 files, +618/−199) plus
-the unrelated `AGENTS.md` change. The message does not describe the feature it contains,
-which will make H10 hard to trace in history. Amending published history on `origin/main`
-was out of scope and forbidden, so this is flagged for the maintainer only.
-
-### 24.7 No H10 design document
-
-No H10 planning or audit document existed; H10 was implemented without a written plan.
-`docs/PROJECT_SUMMARY.md` is the project summary (no file literally named
-`Project_Summary.md` exists). This report is the first H10 documentation artifact.
+No harness was modified or weakened to obtain a pass.
 
 ---
 
-## 25. GO / NO-GO
+## 21. Final GO/NO-GO decision
 
-# ✅ GO
+# H10 POST-BUILD VERIFICATION: **GO**
 
-| # | Required gate | Evidence | Result |
-|---|---------------|----------|--------|
-| 1 | H10 lifecycle passes | 9/9 (Section 3) | PASS |
-| 2 | H10 mirror passes | 44/44 comprehensive (Section 6) | PASS |
-| 3 | 28/28 H10 assertions (or equivalent) independently verified | 22 core + 6 multi independently confirmed; exceeded by 44 + 17 | PASS |
-| 4 | Multi-subscription behaviour passes | 6/6 (Section 12) | PASS |
-| 5 | PB ID = PG ID | (Section 7) | PASS |
-| 6 | Idempotency passes | 5 independent checks, always exactly 1 row (Section 8) | PASS |
-| 7 | 401 protection passes | no secret → 401, wrong → 401, correct → 200 (Section 9) | PASS |
-| 8 | Mirror failure isolation passes | 9/9 (Section 10) | PASS |
-| 9 | H7 regression passes | via H8 test O (Section 13) | PASS |
-| 10 | H8 regression passes | 20/20 (Section 14) | PASS |
-| 11 | H9 regression passes | 32/32 (Section 15) | PASS |
-| 12 | Prisma validate passes | exit 0 (Section 16) | PASS |
-| 13 | Prisma migrate status up to date | `Database schema is up to date!` (Section 16) | PASS |
-| 14 | Prisma generate passes | exit 0, v6.19.3 (Section 16) | PASS |
-| 15 | Lint passes | exit 0 root + api + web (Section 17) | PASS |
-| 16 | Build passes | exit 0, 3241 modules (Section 18) | PASS |
-| 17 | PB health 200 | 200 (Section 19) | PASS |
-| 18 | API health 200 | 200 (Section 19) | PASS |
-| 19 | Probe records cleaned | 6/6 cleanup checks, 0 probes (Section 20) | PASS |
-| 20 | No unexpected protected-file modifications | hashes match, 4 prod files unchanged (Section 22) | PASS |
-| 21 | Final git state understood | only this report; no commit (Section 23) | PASS |
+Every required gate was executed in this pass and passed against live services:
 
-**Assertion tally for this closeout: 139 passed, 0 failed.**
+- Subscription lifecycle **20/20**
+- Multi-subscription regression **8/8**
+- Mirror suite **44/44** (identity, field contract, update propagation, idempotency, negatives)
+- Mirror failure isolation **9/9** (PB unaffected by a dead mirror; converges on recovery)
+- Mirror authorization **5/5** (401 / 401 / 200; secret checked before any DB mutation)
+- H7 regression **PASS** (booking mirror works; real-PB-create block is pre-existing)
+- H8 regression **PASS 20/20**
+- H9 regression **PASS 32/32**
+- Prisma validate / migrate status / generate **PASS** (6 migrations, database up to date)
+- Lint **PASS** (root, api, web — all exit 0)
+- Build **PASS** (vite 7.3.1, 3241 modules, 35.27s, 318 assets)
+- Health **PASS** (PocketBase 200, API 200; all processes hard-stopped, ports released)
+- Cleanup **PASS 11/11** (0 probe rows in PB and PG, 0 orphans, 0 duplicate identities)
+- Git audit **PASS** (no product change, no secrets, no junk, no migration, no weakened
+  harness, no commit by this verification)
 
-| Suite | Passed | Failed |
-|-------|--------|--------|
-| H10 comprehensive (lifecycle, mirror, identity, idempotency, auth, negatives) | 44 | 0 |
-| H10 membership A–E | 17 | 0 |
-| H10 mirror failure isolation (phase 1 + 2) | 9 | 0 |
-| H8 E2E regression | 20 | 0 |
-| H9 E2E regression | 32 | 0 |
-| Cleanup / counts verification | 6 | 0 |
-| PB repair obsolete-API audit | 5 hooks, 0 obsolete | — |
-| Frontend contract inspection | 3 required fields + preserved validation | 0 |
+**Why GO is justified:** H10 replaced the *database* while preserving *behaviour*.
+PocketBase remains authoritative and app-facing
+(`SubscriptionPaymentModal.jsx:136` still calls `pb.collection('subscriptions').create`,
+payload and validation unchanged). Identity is exact — the PB record id **is** the
+PostgreSQL primary key, so the mirror cannot drift. The upsert is idempotent, the secret
+is timing-safe and checked before any mutation, and a total API outage cannot fail a PB
+write or fabricate data. H7/H8/H9 regressions are fully green with byte-identical
+protected harnesses. The one behavioural gap (expiry does not demote) is a **pre-existing**
+product limitation that H10 neither introduced nor is required to fix, and it is recorded
+explicitly rather than presented as a pass.
 
-### Reason for GO
+**Recommendation for the next migration step (do not begin it here):** H11 should
+**not** start as a new feature. Before or as part of H11, the cheapest high-value work is
+to close limitation 1 (membership expiry) and limitation 2 (the two subscription
+cron hooks still calling `$app.findAllRecords()`), since both are pre-existing
+subscription-lifecycle defects that the PostgreSQL system of record will eventually need
+to own. Any PocketBase→PostgreSQL cutover must additionally add a reconciliation job,
+because PG is intentionally empty of historical data (§17) and cannot serve reads for
+records that predate H10.
 
-H10 is verified complete and safe to close. PocketBase remains the authoritative
-application-facing subscription store and the flow behaves exactly as it did before —
-the database is being replaced, not the application's behaviour. Subscriptions mirror
-into PostgreSQL under their **exact** PocketBase identity with correct user linkage via
-`pocketbaseId` and no placeholder users; the mirror is idempotent under repeated
-invocation and under retries; it is protected by a timing-safe shared secret; and,
-critically, a total mirror outage **cannot** fail a valid PocketBase operation — the
-record still persists, the failure is logged, and the mirror self-heals on recovery
-without duplicating rows. Membership state is correct in every specified case, and no
-H7/H8/H9 behaviour regressed. The schema is valid, migration-free, and drift-free; lint
-and build are clean; all probe data has been removed.
-
-The limitations in Section 24 are **pre-existing and outside the H10 changeset** — most
-notably that expiry does not demote premium and that several hooks outside H10 still use
-PocketBase APIs removed in 0.38. None of them blocks closing H10, but they must be
-carried forward as remaining PocketBase dependencies for the eventual cutover to
-Express → Prisma → PostgreSQL.
+**Constraints honoured:** H11 not started · no commit made · no redesign of the
+subscription system · no migration of unrelated domains · no historical PocketBase data
+migrated · all verification servers hard-stopped, ports 8090/3001 released.
